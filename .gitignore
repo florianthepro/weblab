@@ -1,0 +1,2 @@
+# Lokale Konfiguration mit Secrets — niemals committen.
+software/box.env

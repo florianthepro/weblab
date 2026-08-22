@@ -1,0 +1,9 @@
+{
+	email admin@__DOMAIN__
+}
+
+# Kontrollzentrum (Cockpit) — Login mit dem Linux-User
+__DOMAIN__ {
+	encode gzip zstd
+	reverse_proxy 127.0.0.1:9090
+}
