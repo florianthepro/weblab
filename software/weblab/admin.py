@@ -3,6 +3,9 @@
   python3 admin.py set-domain example.com [IP]   Verwaltungs-Domain setzen + Proxy schreiben
   python3 admin.py set-password BENUTZER PASSWORT Passwort setzen (oder Benutzer anlegen)
   python3 admin.py status                         Kurzstatus ausgeben
+  python3 admin.py apps                           Installierte Apps auflisten
+  python3 admin.py catalog                        Katalog anzeigen
+  python3 admin.py install ID NAME [K=V ...]      App aus dem Katalog installieren
 """
 import sys
 
@@ -44,6 +47,55 @@ def set_password(username, password):
     return 0
 
 
+def list_apps():
+    store.init()
+    for app in store.list_apps():
+        state = dockerctl.status(app["slug"])
+        domain = app["domain"] or "-"
+        print(f"{app['id']:>3}  {app['name']:<22} {app['connector_id']:<24} "
+              f"Port {app['host_port']:<6} {domain:<24} {state}")
+    return 0
+
+
+def show_catalog():
+    for group in catalog.groups():
+        versions = ", ".join(v["version"] for v in group["versions"])
+        print(f"{group['name']:<26} [{group['category']:<12}] Versionen: {versions}")
+        for entry in group["versions"]:
+            print(f"    {entry['id']}")
+    return 0
+
+
+def install(connector_id, name, extra):
+    """App installieren. extra: Liste von KEY=VALUE (Formularfelder)."""
+    import apps as appsvc
+    store.init()
+    form = {"name": name}
+    for item in extra:
+        key, _, value = item.partition("=")
+        if key:
+            form[key] = value
+    form.setdefault("exposure", "external")
+    form.setdefault("data_path", "/var/lib/weblab/data")
+    connector = catalog.get(connector_id)
+    if not connector:
+        print(f"Connector nicht gefunden: {connector_id}")
+        return 1
+    for field in connector["fields"].get("required", []):
+        form.setdefault(field["key"], field.get("default", ""))
+    try:
+        app = appsvc.install(connector_id, form)
+    except Exception as exc:  # noqa: BLE001
+        print(f"Installation fehlgeschlagen: {exc}")
+        return 1
+    print(f"installiert: {app['slug']} (id {app['id']}) auf Port {app['host_port']}")
+    if app.get("warnings"):
+        print("Hinweise: " + "; ".join(app["warnings"]))
+    if app.get("dns_done"):
+        print("DNS: " + ", ".join(app["dns_done"]))
+    return 0
+
+
 def status():
     store.init()
     print(f"Setup abgeschlossen: {'ja' if store.is_setup_done() else 'nein'}")
@@ -67,6 +119,12 @@ def main(argv):
         return set_password(argv[2], argv[3])
     if command == "status":
         return status()
+    if command == "apps":
+        return list_apps()
+    if command == "catalog":
+        return show_catalog()
+    if command == "install" and len(argv) >= 4:
+        return install(argv[2], argv[3], argv[4:])
     print(__doc__)
     return 2
 
