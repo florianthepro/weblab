@@ -1,58 +1,70 @@
-# Anforderungen & Komponentenwahl — Server-Kontrollzentrum
+# Anforderungen & Aufbau — weblab
 
 ## Ziel
-Ein sicheres, ultra-simples, web-basiertes Kontrollzentrum auf einem frischen Ubuntu-24.04-Server.
-Ein Kommando installiert alles; danach Login mit dem **Linux-User** und ein Dashboard, das
-Server + Software übersichtlich verwaltet — auf **einer** Domain (keine Subdomain-Wildwuchs).
+Eine fertige Linux-Server-Software: **ein Kommando installiert**, danach verwaltet man den
+Server komplett im Browser. Server-Apps kommen aus einem **Katalog**; man füllt Pflichtfelder
+aus (z. B. RAM bei einem Minecraft-Server) und die App läuft — sauber in Docker isoliert.
 
 ## Prioritäten
-1. **Sicherheit**  2. Features  3. Usability. (Frei/OSS bevorzugt.)
-
-## Komponentenwahl (das „erste Auswählen der Sachen")
-Auswahlkriterium Nr. 1 war Sicherheit: ausgereifte, langlebige Software mit sicheren Defaults
-statt Eigenbau-Panel. Gewählt:
-
-| Baustein | Produkt | Warum |
-|---|---|---|
-| Kontrollzentrum | **Cockpit** | In RHEL/Ubuntu integriert, enterprise-erprobt, **Login über PAM = Linux-User**, keine eigene Nutzerdatenbank. |
-| Ressourcen/Übersicht | Cockpit Overview | CPU/RAM/Disk/Netz des Geräts auf einen Blick. |
-| Laufwerke | **cockpit-storaged** | Datenträger/Partitionen/Mounts sicher verwalten. |
-| Netzwerk/Ports | **cockpit-networkmanager** | Interfaces, Verbindungen, Firewall, offene Ports. |
-| Software/Container | **cockpit-podman** (Podman) | Docker-kompatibel, **rootless-fähig**, kein Daemon-Root — bessere Isolation. |
-| Reverse-Proxy/TLS | **Caddy** | Automatisches HTTPS (Let's Encrypt), minimale, sichere Config. |
-| Domain/DNS | **Cloudflare-API** | A-Record der Domain wird beim Setup gesetzt (Token optional). |
-
-## Sicherheit (Prio 1)
-- Härtung: sysctl, `unattended-upgrades`, `fail2ban`, `chrony`.
-- Firewall (ufw): nur **22/80/443** offen (WireGuard optional).
-- Panel nur über **HTTPS** (Caddy); Cockpit lauscht intern auf 9090, **nicht öffentlich**.
-- SSH: optional key-only (bei gesetztem `ADMIN_SSH_PUBKEY` wird root-/Passwort-Login gesperrt
-  und ein sudo-User `ops` angelegt).
+1. **Sicherheit**  2. Features  3. Bedienbarkeit. (Frei/OSS.)
 
 ## Ablauf
-1. `sudo bash software/run.sh` auf frischem Ubuntu 24.04.
-2. Setup fragt **Domain** + optional **Cloudflare-Token** ab (oder `software/box.env`).
-3. Härtung → Cockpit + Module + Caddy → DNS (A-Record Apex → Server-IP).
-4. `https://DEINE-DOMAIN` öffnen, mit Linux-User einloggen.
+1. `sudo bash software/run.sh` auf frischem Ubuntu 24.04 LTS.
+2. `http://<server-ip>` öffnen → **Setup: Admin + Passwort + Verwaltungs-Domain**
+   (deren `@`-Record auf die IP zeigt), optional Cloudflare-Token → **Ladebalken**.
+3. Danach `https://<domain>`: Dashboard, Apps, Netzwerk, DNS, Speicher, Benutzer, Einstellungen.
 
-## Login
-Cockpit authentifiziert per **PAM = Linux-User**. Ubuntu sperrt root standardmäßig vom
-Web-Login; das Setup schaltet root frei (`ALLOW_ROOT_LOGIN=true`), damit der Login auf einem
-frischen (nur-root-)Server sofort funktioniert. Empfohlen: eigener sudo-Admin
-(`ADMIN_USER`/`ADMIN_PASSWORD`) und root-Web-Login danach abschalten.
+## Aufbau
 
-## Kontrollzentrum-Bereiche (nach Login)
-- **/ (Overview)**: Ressourcenverbrauch des Geräts (CPU/RAM/Disk/Netz).
-- **Laufwerke (Storage)**: Datenträger verwalten.
-- **Netzwerk/Ports**: Interfaces, Verbindungen, Firewall, offene Ports.
-- **Software (Podman)**: Container verwalten — jede Software mit eigenem Port + Domain.
+| Baustein | Wahl | Warum |
+|---|---|---|
+| Oberfläche/Logik | **Python 3 (nur Standardbibliothek)** | Keine Fremd-Pakete → keine Lieferketten-Risiken, Installation kann nicht an Paketquellen scheitern. |
+| Datenhaltung | **SQLite** | Eingebaut, robust, keine zusätzliche Datenbank nötig. |
+| App-Laufzeit | **Docker** | Standard, saubere Isolation je App, Ressourcenlimits (CPU/RAM). |
+| Proxy/TLS | **Caddy** | Automatisches HTTPS je Domain, minimale Konfiguration. |
+| DNS | **Cloudflare-API** | Einträge direkt aus der Oberfläche. |
+| Katalog | **Connector-Dateien (JSON)** | Der „Index“ zwischen Katalog, Formularen und Container. |
 
-## Ehrliche Abgrenzung (was ein reifes Panel NICHT als Assistenten mitbringt)
-- Einen bespoke Onboarding-Wizard „Domain wählen → Cloudflare → Ladebalken" gibt es in Cockpit
-  nicht; deshalb erledigt das **Setup-Kommando** die Domain-/Cloudflare-Token-Konfiguration.
-- Eine In-Panel-Verwaltung für „DNS-Zone" und „Webseiten" ist nicht Teil von Cockpit; DNS setzt
-  das Setup über die Cloudflare-API, Webseiten laufen als Container (cockpit-podman) hinter Caddy.
+## Sicherheit
+- Härtung: ufw (nur 22/80/443 + je App freigegebene Ports), fail2ban, unattended-upgrades, sysctl.
+- Oberfläche nur über Caddy/HTTPS; der Dienst lauscht intern auf `127.0.0.1:8099`.
+- Anmeldung mit eigenem Konto (scrypt-Hash), signierte Sitzungs-Cookies (HttpOnly, SameSite=Strict,
+  Secure hinter HTTPS), **CSRF-Schutz** bei allen schreibenden Aktionen.
+- Erreichbarkeit je App wählbar: **extern**, **intern** (nur `127.0.0.1`) oder **spezifisch**
+  (nur erlaubte IPs/CIDR — als ufw-Regel).
+- Container mit CPU-/RAM-Limit, eigenem Datenpfad und optional eigenem Subnetz.
 
-## Konfiguration
-Werte kommen aus `software/box.env` (siehe `box.env.example`) **oder** interaktiver Abfrage —
-**keine Secrets im Repo**. Nach dem Setup Token/Passwörter rotieren.
+## Connectors — der Index
+Je App-Version eine Datei in `connectors/keep/`. Sie liefert Katalogtext, Docker-Image, Ports,
+Datenpfad und die **drei Feldgruppen**:
+
+| Gruppe | Wann | Beispiel Minecraft |
+|---|---|---|
+| **Pflicht** (`required`) | beim Installieren | RAM (GB), max. Spieler |
+| **Basis** (in der Software) | für alle Apps gleich | Name, Domain, intern/extern, Port, Ablageort, Laufwerk, CPU, RAM |
+| **Spezifisch** (`specific`) | beim Bearbeiten | MOTD, Spielmodus, Schwierigkeit, PvP … |
+
+Jedes Feld hat ein **Target** — es sagt, wohin der Wert geschrieben wird:
+`env` (Umgebungsvariable) oder `file_line` (die Zeile in einer Datei, die mit einem Präfix
+beginnt, z. B. `motd=` in `/data/server.properties`).
+
+**Gruppierung:** Versionen derselben Software teilen sich `group` und erscheinen im Katalog als
+**eine** App mit Versionsauswahl — wie im Ubuntu-Store.
+
+**Erweitert:** `advanced.plugins` schaltet die Plugin-Verwaltung frei (Quelle wählen → suchen →
+hinzufügen; Gesamtliste mit Löschen). Für Minecraft: Modrinth und SpigotMC.
+
+## Bereiche der Oberfläche
+- **Dashboard** — Auslastung des Geräts und Verbrauch je App (CPU/RAM/Netz), Status, Ports.
+- **Apps** — Katalog + installierte Apps; je App Übersicht, Einstellungen (Basis/Spezifisch/
+  Erweitert), Protokoll, Start/Stopp/Neustart/Entfernen.
+- **Netzwerk** — Schnittstellen, **Subnetze anlegen/löschen**, alle belegten Ports (intern/extern).
+- **DNS** — Einträge der Verwaltungs-Domain anlegen/ersetzen/löschen.
+- **Speicher** — Dateisysteme, Laufwerke, Datenpfade und Belegung je App.
+- **Benutzer** — Konten anlegen/löschen, eigenes Passwort ändern.
+- **Einstellungen** — Domain, Server-IP, Cloudflare-Token, Katalog neu einlesen, Status.
+
+## Bewusste Grenzen
+- Die Oberfläche ist auf Desktop ausgelegt (Tabellen/Übersicht), funktioniert aber responsiv.
+- „Ablageort: auf dem Gerät“ ist vorbereitet; ausgeführt werden Apps derzeit als Docker-Container.
+- Konfiguration ohne Secrets im Repo: alles Sensible entsteht erst beim Setup auf dem Server.

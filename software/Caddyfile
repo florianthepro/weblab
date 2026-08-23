@@ -1,9 +1,10 @@
 {
-	email admin@__DOMAIN__
+	admin 127.0.0.1:2019
 }
 
-# Kontrollzentrum (Cockpit) — Login mit dem Linux-User
-__DOMAIN__ {
-	encode gzip zstd
-	reverse_proxy 127.0.0.1:9090
+# Start-Konfiguration: Panel über die Server-IP erreichbar.
+# Sobald im Setup eine Verwaltungs-Domain gesetzt wird, schreibt weblab diese Datei neu
+# (inklusive HTTPS für die Domain und je installierter Web-App eine eigene Domain).
+http:// {
+	reverse_proxy 127.0.0.1:8099
 }

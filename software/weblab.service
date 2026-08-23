@@ -1,0 +1,29 @@
+[Unit]
+Description=weblab — Server-Verwaltung
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/weblab/weblab
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=WEBLAB_DB=/var/lib/weblab/weblab.db
+Environment=WEBLAB_CONNECTORS=/opt/weblab/connectors/keep
+Environment=WEBLAB_CADDYFILE=/etc/caddy/Caddyfile
+Environment=WEBLAB_BIND=127.0.0.1
+Environment=WEBLAB_PORT=8099
+ExecStart=/usr/bin/python3 /opt/weblab/weblab/__main__.py
+Restart=always
+RestartSec=3
+
+# Härtung (weblab braucht Docker/systemd/ufw, daher kein vollständiges Sandboxing)
+NoNewPrivileges=yes
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,28 @@
+{
+  "id": "website-nginx-1.27",
+  "group": "website-nginx",
+  "name": "Webseite (Nginx)",
+  "version": "1.27",
+  "category": "Web",
+  "icon": "🌐",
+  "summary": "Statische Webseite über Nginx — Dateien einfach ins Datenverzeichnis legen.",
+  "description": "Nginx-Webserver für statische Seiten. Wird per Domain über den Reverse-Proxy mit automatischem HTTPS veröffentlicht.",
+  "runtime": "docker",
+  "image": "nginx:1.27-alpine",
+  "container_port": 80,
+  "protocol": "tcp",
+  "http": true,
+  "data": {"container_path": "/usr/share/nginx/html", "label": "Webseiten-Dateien"},
+  "env": {},
+  "fields": {
+    "required": [
+      {"key": "index_title", "label": "Titel der Startseite", "type": "string", "default": "Meine Webseite", "required": true,
+       "help": "Wird beim Anlegen in die index.html geschrieben.", "target": {"kind": "none"}}
+    ],
+    "specific": [
+      {"key": "index_title", "label": "Titel der Startseite", "type": "string", "default": "Meine Webseite",
+       "target": {"kind": "none"}}
+    ]
+  },
+  "advanced": {}
+}
