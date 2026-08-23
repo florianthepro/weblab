@@ -1,0 +1,29 @@
+{
+  "id": "redis-7",
+  "group": "redis",
+  "name": "Redis",
+  "version": "7",
+  "category": "Datenbanken",
+  "icon": "🧠",
+  "summary": "Redis In-Memory-Speicher (Cache/Queue), nur intern.",
+  "description": "Schneller In-Memory-Datenspeicher für Cache und Warteschlangen. Ohne Authentifizierung — daher nur intern erreichbar lassen.",
+  "runtime": "docker",
+  "image": "redis:7-alpine",
+  "container_port": 6379,
+  "protocol": "tcp",
+  "http": false,
+  "default_exposure": "internal",
+  "data": {
+    "container_path": "/data",
+    "label": "Redis-Daten"
+  },
+  "env": {},
+  "notes": [
+    "Ohne Passwort konfiguriert — Erreichbarkeit auf „intern“ belassen."
+  ],
+  "fields": {
+    "required": [],
+    "specific": []
+  },
+  "advanced": {}
+}

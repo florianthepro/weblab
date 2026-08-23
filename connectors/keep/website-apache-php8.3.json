@@ -2,12 +2,12 @@
   "id": "website-apache-php8.3",
   "group": "website-apache",
   "manage_subdomain": "apache",
-  "name": "Webseite (Apache + PHP)",
+  "name": "Webseite (Apache)",
   "version": "8.3",
   "category": "Web",
   "icon": "🅰️",
-  "summary": "Apache mit PHP 8.3 — eine Webseite je Installation.",
-  "description": "Apache-Webserver mit PHP 8.3. Jede Installation ist eigenständig: eigener Container, eigener Port, eigene Domain und ein eigenes Dateisystem unter „Dateien“. Für mehrere Webseiten mehrfach installieren.",
+  "summary": "Apache-Webserver für eine Webseite — PHP nachrüstbar.",
+  "description": "Apache-Webserver. Standardmäßig eine statische Seite; PHP 8.3 ist unter Einstellungen → Spezifisch mit einem Schalter aktivierbar. Jede Installation ist eigenständig (eigener Container, Port, Domain, Dateibereich). Für mehrere Webseiten mehrfach installieren.",
   "runtime": "docker",
   "image": "php:8.3-apache",
   "container_port": 80,
@@ -20,9 +20,12 @@
   "env": {},
   "init_files": [
     {
-      "path": "index.php",
-      "content": "<!doctype html>\n<html lang=\"de\">\n<meta charset=\"utf-8\">\n<title>{index_title}</title>\n<h1>{index_title}</h1>\n<p>Diese Webseite läuft über weblab (Apache + PHP <?= PHP_VERSION ?>).</p>\n<p>Bearbeite diese Datei im Panel unter <b>Dateien</b>.</p>\n"
+      "path": "index.html",
+      "content": "<!doctype html>\n<html lang=\"de\">\n<meta charset=\"utf-8\">\n<title>{index_title}</title>\n<h1>{index_title}</h1>\n<p>Diese Webseite läuft über weblab.</p>\n<p>Bearbeite die Dateien im Panel unter <b>Dateien</b>. PHP lässt sich unter <b>Einstellungen → Spezifisch</b> aktivieren.</p>\n"
     }
+  ],
+  "notes": [
+    "PHP ist standardmäßig aus (statische Seite). Zum Ausführen von .php-Dateien unter Einstellungen → Spezifisch „PHP aktivieren“ einschalten."
   ],
   "fields": {
     "required": [
@@ -32,13 +35,25 @@
         "type": "string",
         "default": "Meine Webseite",
         "required": true,
-        "help": "Wird beim Anlegen in die index.php geschrieben — später frei änderbar.",
+        "help": "Wird beim Anlegen in die index.html geschrieben — später frei änderbar.",
         "target": {
           "kind": "none"
         }
       }
     ],
     "specific": [
+      {
+        "key": "php_enabled",
+        "label": "PHP aktivieren",
+        "type": "bool",
+        "default": false,
+        "help": "Aus = reine statische Seite. An = .php-Dateien werden ausgeführt (PHP 8.3).",
+        "target": {
+          "kind": "file_line",
+          "file": "/usr/local/etc/php/conf.d/weblab.ini",
+          "prefix": "engine = "
+        }
+      },
       {
         "key": "php_memory_limit",
         "label": "PHP Speicherlimit",
@@ -50,6 +65,7 @@
           "1024M"
         ],
         "default": "256M",
+        "help": "Nur wirksam, wenn PHP aktiviert ist.",
         "target": {
           "kind": "file_line",
           "file": "/usr/local/etc/php/conf.d/weblab.ini",
@@ -82,7 +98,7 @@
           "On"
         ],
         "default": "Off",
-        "help": "Im Betrieb ausgeschaltet lassen — Fehlermeldungen verraten interne Details.",
+        "help": "Im Betrieb aus lassen — Fehlermeldungen verraten interne Details.",
         "target": {
           "kind": "file_line",
           "file": "/usr/local/etc/php/conf.d/weblab.ini",

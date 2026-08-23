@@ -1,0 +1,41 @@
+{
+  "id": "vaultwarden-1.32",
+  "group": "vaultwarden",
+  "name": "Vaultwarden",
+  "version": "1.32",
+  "category": "Werkzeuge",
+  "icon": "🔐",
+  "summary": "Passwort-Manager (Bitwarden-kompatibel), self-hosted.",
+  "description": "Leichter, mit Bitwarden-Apps kompatibler Passwort-Manager. Nur über HTTPS betreiben. Nach der Registrierung des ersten Kontos die Registrierung ausschalten.",
+  "runtime": "docker",
+  "image": "vaultwarden/server:1.32.0",
+  "container_port": 80,
+  "protocol": "tcp",
+  "http": true,
+  "default_exposure": "external",
+  "data": {
+    "container_path": "/data",
+    "label": "Tresor-Daten"
+  },
+  "env": {},
+  "notes": [
+    "Nur über HTTPS betreiben (eigene Domain). Nach dem ersten Konto „Registrierung erlauben“ ausschalten."
+  ],
+  "fields": {
+    "required": [],
+    "specific": [
+      {
+        "key": "signups_allowed",
+        "label": "Registrierung erlauben",
+        "type": "bool",
+        "default": true,
+        "help": "Nach Anlegen des ersten Kontos ausschalten.",
+        "target": {
+          "kind": "env",
+          "name": "SIGNUPS_ALLOWED"
+        }
+      }
+    ]
+  },
+  "advanced": {}
+}

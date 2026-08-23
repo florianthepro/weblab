@@ -1,0 +1,29 @@
+{
+  "id": "adminer-4",
+  "group": "adminer",
+  "name": "Adminer",
+  "version": "4",
+  "category": "Web",
+  "icon": "🗄️",
+  "summary": "Datenbank-Oberfläche im Browser (MySQL/MariaDB/PostgreSQL).",
+  "description": "Leichte Weboberfläche zum Verwalten von Datenbanken. Am Login gibst du Server, Benutzer und Passwort der Datenbank ein.",
+  "runtime": "docker",
+  "image": "adminer:4",
+  "container_port": 8080,
+  "protocol": "tcp",
+  "http": true,
+  "default_exposure": "external",
+  "data": {
+    "container_path": "/var/lib/adminer",
+    "label": "Daten"
+  },
+  "env": {},
+  "notes": [
+    "Datenbank-Oberfläche: am besten auf erlaubte IPs beschränken (Erreichbarkeit: Spezifisch)."
+  ],
+  "fields": {
+    "required": [],
+    "specific": []
+  },
+  "advanced": {}
+}

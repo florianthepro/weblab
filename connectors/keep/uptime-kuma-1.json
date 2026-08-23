@@ -1,0 +1,26 @@
+{
+  "id": "uptime-kuma-1",
+  "group": "uptime-kuma",
+  "name": "Uptime Kuma",
+  "version": "1",
+  "category": "Werkzeuge",
+  "icon": "📈",
+  "summary": "Überwachung von Webseiten/Diensten mit Benachrichtigungen.",
+  "description": "Self-hosted Monitoring: prüft Webseiten und Dienste, zeigt Verfügbarkeit und benachrichtigt bei Ausfällen. Beim ersten Aufruf legst du das Admin-Konto an.",
+  "runtime": "docker",
+  "image": "louislam/uptime-kuma:1",
+  "container_port": 3001,
+  "protocol": "tcp",
+  "http": true,
+  "default_exposure": "external",
+  "data": {
+    "container_path": "/app/data",
+    "label": "Daten"
+  },
+  "env": {},
+  "fields": {
+    "required": [],
+    "specific": []
+  },
+  "advanced": {}
+}

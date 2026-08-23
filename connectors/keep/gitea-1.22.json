@@ -1,0 +1,33 @@
+{
+  "id": "gitea-1.22",
+  "group": "gitea",
+  "name": "Gitea",
+  "version": "1.22",
+  "category": "Werkzeuge",
+  "icon": "🍵",
+  "summary": "Leichtgewichtiges Git-Hosting (Repos, Issues, PRs).",
+  "description": "Self-hosted Git-Dienst mit Weboberfläche. Beim ersten Aufruf führt Gitea durch die Erstkonfiguration und das Admin-Konto.",
+  "runtime": "docker",
+  "image": "gitea/gitea:1.22",
+  "container_port": 3000,
+  "protocol": "tcp",
+  "http": true,
+  "default_exposure": "external",
+  "data": {
+    "container_path": "/data",
+    "label": "Gitea-Daten"
+  },
+  "env": {
+    "USER_UID": "1000",
+    "USER_GID": "1000",
+    "GITEA__server__DISABLE_SSH": "true"
+  },
+  "notes": [
+    "SSH-Zugriff ist deaktiviert; Klonen/Pushen über HTTPS."
+  ],
+  "fields": {
+    "required": [],
+    "specific": []
+  },
+  "advanced": {}
+}
