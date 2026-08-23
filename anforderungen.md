@@ -35,6 +35,12 @@ statt Eigenbau-Panel. Gewählt:
 3. Härtung → Cockpit + Module + Caddy → DNS (A-Record Apex → Server-IP).
 4. `https://DEINE-DOMAIN` öffnen, mit Linux-User einloggen.
 
+## Login
+Cockpit authentifiziert per **PAM = Linux-User**. Ubuntu sperrt root standardmäßig vom
+Web-Login; das Setup schaltet root frei (`ALLOW_ROOT_LOGIN=true`), damit der Login auf einem
+frischen (nur-root-)Server sofort funktioniert. Empfohlen: eigener sudo-Admin
+(`ADMIN_USER`/`ADMIN_PASSWORD`) und root-Web-Login danach abschalten.
+
 ## Kontrollzentrum-Bereiche (nach Login)
 - **/ (Overview)**: Ressourcenverbrauch des Geräts (CPU/RAM/Disk/Netz).
 - **Laufwerke (Storage)**: Datenträger verwalten.

@@ -10,6 +10,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 if [ -f "$HERE/box.env" ]; then set -a; . "$HERE/box.env"; set +a; fi
 DOMAIN="${DOMAIN:-}"; CF_TOKEN="${CF_TOKEN:-}"
 DATA_MOUNT="${DATA_MOUNT:-/mnt/data}"; DATA_DEVICE="${DATA_DEVICE:-}"; ADMIN_SSH_PUBKEY="${ADMIN_SSH_PUBKEY:-}"
+ALLOW_ROOT_LOGIN="${ALLOW_ROOT_LOGIN:-true}"; ADMIN_USER="${ADMIN_USER:-}"; ADMIN_PASSWORD="${ADMIN_PASSWORD:-}"
 
 if [ -z "$DOMAIN" ]; then read -rp "Manage-Domain (z.B. example.com): " DOMAIN; fi
 [ -n "$DOMAIN" ] || { echo "DOMAIN ist nötig."; exit 1; }
@@ -23,6 +24,7 @@ DATA_MOUNT="$DATA_MOUNT" DATA_DEVICE="$DATA_DEVICE" ADMIN_SSH_PUBKEY="$ADMIN_SSH
 
 echo "### 2) Kontrollzentrum (Cockpit) + Caddy + DNS ###"
 DOMAIN="$DOMAIN" CF_TOKEN="$CF_TOKEN" DATA_MOUNT="$DATA_MOUNT" \
+  ALLOW_ROOT_LOGIN="$ALLOW_ROOT_LOGIN" ADMIN_USER="$ADMIN_USER" ADMIN_PASSWORD="$ADMIN_PASSWORD" \
   bash "$HERE/install.sh"
 
 echo "### FERTIG. Kontrollzentrum: https://$DOMAIN  (Login = Linux-User) ###"

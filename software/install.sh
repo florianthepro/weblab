@@ -3,6 +3,7 @@
 # Läuft als root auf der Box (nach bootstrap.sh). Env: DOMAIN, CF_TOKEN, DATA_MOUNT.
 set -euo pipefail
 DOMAIN="${DOMAIN:?}"; CF_TOKEN="${CF_TOKEN:-}"; DATA_MOUNT="${DATA_MOUNT:-/mnt/data}"
+ALLOW_ROOT_LOGIN="${ALLOW_ROOT_LOGIN:-true}"; ADMIN_USER="${ADMIN_USER:-}"; ADMIN_PASSWORD="${ADMIN_PASSWORD:-}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 export DEBIAN_FRONTEND=noninteractive
 
@@ -26,6 +27,27 @@ install -d /etc/cockpit
 sed "s/__DOMAIN__/$DOMAIN/g" "$HERE/cockpit.conf" > /etc/cockpit/cockpit.conf
 systemctl enable --now cockpit.socket
 systemctl try-restart cockpit || true
+
+echo "== Cockpit-Login (Linux-User via PAM) =="
+# Ubuntu/Debian sperren root standardmäßig vom Cockpit-Web-Login (/etc/cockpit/disallowed-users).
+# Damit "Login mit dem Linux-User" auf einem frischen (nur-root-)Server sofort funktioniert,
+# wird root freigeschaltet — abgesichert durch HTTPS, Firewall und fail2ban.
+touch /etc/cockpit/disallowed-users
+# Optionaler dedizierter sudo-Admin (empfohlen gegenüber root-Web-Login):
+if [ -n "$ADMIN_USER" ]; then
+  id "$ADMIN_USER" >/dev/null 2>&1 || adduser --disabled-password --gecos "" "$ADMIN_USER"
+  usermod -aG sudo "$ADMIN_USER"
+  [ -n "$ADMIN_PASSWORD" ] && echo "$ADMIN_USER:$ADMIN_PASSWORD" | chpasswd
+  sed -i "\|^$ADMIN_USER\$|d" /etc/cockpit/disallowed-users
+  echo "  Admin-User: $ADMIN_USER (sudo)"
+fi
+if [ "$ALLOW_ROOT_LOGIN" = "true" ]; then
+  sed -i '/^root$/d' /etc/cockpit/disallowed-users
+  echo "  root-Web-Login aktiviert."
+else
+  grep -qx root /etc/cockpit/disallowed-users || echo root >> /etc/cockpit/disallowed-users
+  echo "  root-Web-Login gesperrt (nur ${ADMIN_USER:-anderer sudo-User})."
+fi
 
 echo "== Ports 80/443 freimachen (alte Docker-Container früherer Designs entfernen) =="
 # Der Reverse-Proxy ist Caddy (systemd). Früher testweise gestartete Docker-Container

@@ -15,5 +15,7 @@ Das Setup fragt **Domain** und (optional) **Cloudflare-API-Token** ab — oder t
 vorab in `software/box.env` ein (`cp software/box.env.example software/box.env`).
 
 Danach **`https://DEINE-DOMAIN`** öffnen und mit dem **Linux-User** einloggen.
+Standardmäßig ist der root-Web-Login aktiv (`ALLOW_ROOT_LOGIN=true`); empfohlen ist ein
+eigener sudo-Admin (`ADMIN_USER`/`ADMIN_PASSWORD` in `box.env`).
 
 Vorgaben & Komponentenwahl: [`anforderungen.md`](anforderungen.md)
