@@ -5,7 +5,7 @@ import re
 
 CONNECTOR_DIR = os.environ.get("WEBLAB_CONNECTORS", "/opt/weblab/connectors/keep")
 
-# "basic" gilt für ALLE Apps gleich und wird hier (nicht im Connector) definiert.
+# Gilt für alle Apps gleich, daher hier statt im Connector.
 BASIC_FIELDS = [
     {"key": "name", "label": "Name", "type": "string", "required": True,
      "help": "Anzeigename dieser App-Instanz."},
@@ -53,7 +53,7 @@ def _dir_signature():
 
 
 def load_all(force=False):
-    """Alle Connector-Dateien laden (mit einfachem mtime-Cache)."""
+    """Alle Connector-Dateien laden."""
     sig = _dir_signature()
     if not force and sig is not None and sig == _cache["mtime"]:
         return _cache["items"]
@@ -90,12 +90,12 @@ def load_all(force=False):
 
 
 def _version_key(version):
-    """Sortierschlüssel: 1.21.5 > 1.20.6 > 1.9 (numerisch, nicht alphabetisch)."""
+    """Numerisch sortieren: 1.21.5 > 1.20.6 > 1.9."""
     return [int(p) if p.isdigit() else p for p in re.split(r"[.\-_]", str(version))]
 
 
 def groups():
-    """Katalog-Ansicht: eine Kachel je Gruppe, Versionen absteigend sortiert."""
+    """Eine Kachel je Gruppe, neueste Version zuerst."""
     by_group = {}
     for conn in load_all():
         by_group.setdefault(conn["group"], []).append(conn)

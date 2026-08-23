@@ -5,7 +5,7 @@
   "version": "1.20.6",
   "category": "Spiele",
   "icon": "⛏️",
-  "summary": "Minecraft Java Server (Paper) — Plugins, Welten, volle Kontrolle.",
+  "summary": "Minecraft-Server (Paper) mit Plugin-Verwaltung.",
   "description": "Paper-basierter Minecraft-Server für die Java Edition. Unterstützt Plugins (Modrinth/Spiget), eigene Welten und alle server.properties-Einstellungen.",
   "runtime": "docker",
   "image": "itzg/minecraft-server:java17",

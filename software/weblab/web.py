@@ -23,19 +23,19 @@ import ui
 HOST = os.environ.get("WEBLAB_BIND", "127.0.0.1")
 PORT = int(os.environ.get("WEBLAB_PORT", "8099"))
 COOKIE = "weblab_session"
+EXPOSURE_LABELS = {"external": "Extern", "internal": "Intern", "specific": "Spezifisch"}
+LOCATION_LABELS = {"docker": "Docker", "device": "Gerät"}
 SESSION_MAX_AGE = 12 * 3600
 
-# Fortschritt des Setup-Assistenten (Ladebalken)
+# Fortschritt des Setup-Assistenten
 SETUP_STATE = {"running": False, "percent": 0, "step": "", "done": False, "error": None}
 
-# Laufende Cloudflare-Anmeldung (OAuth): Zufallswerte des aktuellen Vorgangs
+# Laufende Cloudflare-Anmeldung (OAuth)
 CF_LOGIN = {"state": "", "verifier": "", "client_id": "", "client_secret": "",
             "redirect_uri": ""}
 
 
-# --------------------------------------------------------------------------
 # Sitzungen (signierte Cookies) + CSRF
-# --------------------------------------------------------------------------
 def _secret():
     return (store.get_setting("session_secret") or "insecure").encode()
 
@@ -67,9 +67,7 @@ def csrf_for(session):
     return hmac.new(_secret(), f"csrf:{session.get('sid', '')}".encode(), sha256).hexdigest()[:32]
 
 
-# --------------------------------------------------------------------------
-# Setup-Ablauf (im Hintergrund, damit der Ladebalken laufen kann)
-# --------------------------------------------------------------------------
+# Setup-Ablauf (Hintergrund, damit der Fortschritt abfragbar bleibt)
 def run_setup(username, password, domain, cf_email="", cf_key=""):
     def worker():
         try:
@@ -123,14 +121,11 @@ def run_setup(username, password, domain, cf_email="", cf_key=""):
     threading.Thread(target=worker, daemon=True).start()
 
 
-# --------------------------------------------------------------------------
 # Request-Handler
-# --------------------------------------------------------------------------
 class Handler(BaseHTTPRequestHandler):
     server_version = "weblab"
     protocol_version = "HTTP/1.1"
 
-    # ---- Basis-Helfer ----
     def log_message(self, fmt, *args):
         pass  # Zugriffe protokolliert Caddy
 
@@ -211,7 +206,6 @@ class Handler(BaseHTTPRequestHandler):
     def csrf(self):
         return csrf_for(self.session) if self.session else ""
 
-    # ---- Routing ----
     def do_GET(self):
         path = urllib.parse.urlparse(self.path).path.rstrip("/") or "/"
         try:
@@ -228,7 +222,6 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as exc:  # noqa: BLE001
             self._redirect(self.headers.get("Referer", "/"), ("err", str(exc)))
 
-    # ---------------- GET ----------------
     def route_get(self, path):
         if not store.is_setup_done() and not path.startswith(("/setup", "/api/setup", "/static")):
             return self._redirect("/setup")
@@ -287,7 +280,6 @@ class Handler(BaseHTTPRequestHandler):
         return self._send(ui.page("Nicht gefunden", "<h1>404</h1><p class='sub'>Seite gibt es nicht.</p>",
                                   user=(self.session or {}).get("user")), 404)
 
-    # ---------------- POST ----------------
     def route_post(self, path):
         content_type = self.headers.get("Content-Type", "")
         if content_type.startswith("multipart/form-data"):
@@ -332,9 +324,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.do_settings(form)
         return self._redirect("/")
 
-    # ==================================================================
     # Setup + Login
-    # ==================================================================
     def page_setup(self):
         if store.is_setup_done():
             return self._redirect("/login")
@@ -353,12 +343,11 @@ class Handler(BaseHTTPRequestHandler):
  <div class="field"><label for="domain">Verwaltungs-Domain</label>
   <input id="domain" name="domain" placeholder="example.com" required>
   <p class="help">Der A-Record (@) dieser Domain muss auf diesen Server zeigen{f' ({ui.esc(server_ip)})' if server_ip else ''}.</p></div>
- <div class="field"><label for="cf_email">Cloudflare-Konto <span class="muted">(optional)</span></label>
-  <input id="cf_email" name="cf_email" type="email" placeholder="E-Mail deines Cloudflare-Kontos" autocomplete="off">
+ <div class="field"><label for="cf_email">Cloudflare-Konto <span class="muted">optional</span></label>
+  <input id="cf_email" name="cf_email" type="email" placeholder="E-Mail" autocomplete="off">
   <input id="cf_key" name="cf_key" type="password" placeholder="Konto-Schlüssel" autocomplete="off" style="margin-top:8px">
-  <p class="help">Damit legt weblab alle DNS-Einträge automatisch an. Du musst selbst keinen
-  Token erstellen — weblab erzeugt einen, der <b>nur DNS</b> darf. Der Konto-Schlüssel wird
-  dafür einmal verwendet und <b>nicht gespeichert</b>. Später jederzeit unter Einstellungen möglich.</p></div>
+  <p class="help">Legt DNS-Einträge automatisch an. Erzeugt einen Token nur für DNS;
+  der Konto-Schlüssel wird nicht gespeichert. Auch später unter Einstellungen möglich.</p></div>
  <button class="btn primary" type="submit" style="width:100%">Einrichtung starten</button>
 </form></div></div>"""
         self._send(ui.bare("Einrichten", body))
@@ -432,9 +421,7 @@ class Handler(BaseHTTPRequestHandler):
             cookie += "; Secure"
         return self._send("", 303, "text/plain", {"Location": "/", "Set-Cookie": cookie})
 
-    # ==================================================================
     # Dashboard
-    # ==================================================================
     def collect_stats(self):
         overview = sysinfo.overview()
         container_stats = dockerctl.stats() if dockerctl.available() else {}
@@ -496,9 +483,7 @@ class Handler(BaseHTTPRequestHandler):
 </dl></div>"""
         self._render("Dashboard", body, "/")
 
-    # ==================================================================
     # Apps: Katalog + Liste
-    # ==================================================================
     def page_apps(self):
         installed = store.list_apps()
         rows = ""
@@ -510,7 +495,7 @@ class Handler(BaseHTTPRequestHandler):
                      f"<td>{ui.status_pill(state)}</td>"
                      f"<td class='mono'>{ui.esc(app['version'])}</td>"
                      f"<td class='mono'>{ui.esc(link)}</td>"
-                     f"<td class='mono'>{ui.esc(app['exposure'])}</td>"
+                     f"<td>{ui.esc(EXPOSURE_LABELS.get(app['exposure'], app['exposure']))}</td>"
                      f"<td><a class='btn sm' href='/apps/{app['id']}/edit'>Einstellungen</a></td></tr>")
         installed_html = (f"<div class='card'><div class='tbl-wrap'><table>"
                           f"<tr><th>Name</th><th>Status</th><th>Version</th><th>Erreichbar</th>"
@@ -522,12 +507,13 @@ class Handler(BaseHTTPRequestHandler):
         for group in catalog.groups():
             versions = ", ".join(v["version"] for v in group["versions"][:3])
             more = "" if len(group["versions"]) <= 3 else " …"
+            version_label = "Version" if len(group["versions"]) == 1 else "Versionen"
             tiles += f"""<div class="appcard">
-<div class="row"><span class="ico">{ui.esc(group['icon'])}</span>
-<div><div class="nm">{ui.esc(group['name'])}</div>
-<div class="help">{ui.esc(group['category'])}</div></div></div>
+<div class="row" style="flex-wrap:nowrap"><span class="ico">{ui.esc(group['icon'])}</span>
+<div style="min-width:0"><div class="nm">{ui.esc(group['name'])}</div>
+<div class="help" style="margin:1px 0 0">{ui.esc(group['category'])}</div></div></div>
 <div class="sm">{ui.esc(group['summary'])}</div>
-<div class="help">Versionen: {ui.esc(versions)}{more}</div>
+<div class="help">{version_label}: {ui.esc(versions)}{more}</div>
 <a class="btn primary" href="/apps/catalog/{ui.esc(group['group'])}">Installieren</a></div>"""
         if not tiles:
             tiles = "<div class='card muted'>Keine Connectors gefunden.</div>"
@@ -573,7 +559,7 @@ class Handler(BaseHTTPRequestHandler):
   <div class="field"><label for="connector_id">Version</label>
    <select id="connector_id" name="connector_id"
     onchange="location.href='/apps/catalog/{ui.esc(group_id)}?version='+this.value">{version_options}</select>
-   <p class="help">Wie im Store: eine App, mehrere Versionen.</p></div>
+</div>
   {required_html}
  </div>
  <div class="card"><h3>2 · Basis (für alle Apps gleich)</h3>
@@ -581,7 +567,7 @@ class Handler(BaseHTTPRequestHandler):
    <input id="name" name="name" value="{ui.esc(group['name'])}" required></div>
   <div class="field"><label for="domain">Domain</label>
    <input id="domain" name="domain" placeholder="app.{ui.esc(store.get_setting('manage_domain', 'example.com'))}">
-   <p class="help">{'Wird per HTTPS veröffentlicht.' if connector.get('http') else 'Nur Info — diese App läuft über einen Port, nicht über HTTP.'}</p></div>
+   <p class="help">{'Wird per HTTPS veröffentlicht.' if connector.get('http') else 'Diese App läuft über einen Port, nicht über HTTP.'}</p></div>
   {ui.select_field('exposure', 'Erreichbarkeit', ['external', 'internal', 'specific'], exposure_default,
                    'Intern = nur dieser Server. Spezifisch = nur erlaubte IPs.',
                    {'external': 'Extern (öffentlich)', 'internal': 'Intern (nur Server)',
@@ -623,9 +609,7 @@ class Handler(BaseHTTPRequestHandler):
             note += " Hinweise: " + "; ".join(warnings)
         return self._redirect(f"/apps/{app['id']}", ("ok", note))
 
-    # ==================================================================
-    # App-Detail, Bearbeiten (Basis / Spezifisch / Erweitert), Aktionen
-    # ==================================================================
+    # App-Detail, Einstellungen, Aktionen
     def _app_and_connector(self, app_id):
         app = store.get_app(app_id)
         if not app:
@@ -675,8 +659,7 @@ class Handler(BaseHTTPRequestHandler):
             if rows:
                 secrets_html = (f"<h2>Zugangsdaten &amp; Hinweise</h2>"
                                 f"<div class='card'><div class='tbl-wrap'><table>{rows}</table></div>"
-                                f"<p class='help'>Diese Angaben nur hier sichtbar — bitte sicher "
-                                f"notieren.</p></div>")
+                                f"<p class='help'>Nur hier sichtbar — bitte notieren.</p></div>")
 
         body = f"""<a href="/apps" class="muted">← Apps</a>
 <div class="between"><div><h1>{ui.esc(app['name'])}</h1>
@@ -693,8 +676,8 @@ class Handler(BaseHTTPRequestHandler):
 <dt>Erreichbar über</dt><dd class="mono">{ui.esc(url)}</dd>
 <dt>Domain</dt><dd class="mono">{ui.esc(app['domain']) or '—'}</dd>
 <dt>Port (extern)</dt><dd class="mono">{ui.esc(app['host_port'])} → intern {ui.esc(app['container_port'])}</dd>
-<dt>Sichtbarkeit</dt><dd>{ui.esc(app['exposure'])}{(' · ' + ui.esc(app['allow_cidr'])) if app['allow_cidr'] else ''}</dd>
-<dt>Ablageort</dt><dd>{ui.esc(app['location'])}</dd>
+<dt>Sichtbarkeit</dt><dd>{ui.esc(EXPOSURE_LABELS.get(app['exposure'], app['exposure']))}{(' · ' + ui.esc(app['allow_cidr'])) if app['allow_cidr'] else ''}</dd>
+<dt>Ablageort</dt><dd>{ui.esc(LOCATION_LABELS.get(app['location'], app['location']))}</dd>
 <dt>Datenpfad</dt><dd class="mono">{ui.esc(appsvc.host_data_path(app, app['data_path']))}</dd>
 <dt>Container</dt><dd class="mono">{ui.esc(dockerctl.container_name(app['slug']))}</dd>
 </dl></div>
@@ -737,8 +720,8 @@ class Handler(BaseHTTPRequestHandler):
             content = f"""<form method="post" action="/apps/{app['id']}/edit?section=specific">
 {ui.csrf_input(self.csrf)}<input type="hidden" name="section" value="specific">
 <div class="card"><h3>App-spezifische Einstellungen</h3>
-<p class="help" style="margin-bottom:14px">Vom Connector definiert — wird direkt in die
-Konfigurationsdateien der App geschrieben.</p>{inner}
+<p class="help" style="margin-bottom:14px">Vom Connector definiert, wird in die
+Konfiguration der App geschrieben.</p>{inner}
 <button class="btn primary" type="submit">Speichern</button></div></form>"""
         elif section == "advanced" and has_advanced:
             content = self._plugins_section(app, connector)
@@ -756,8 +739,8 @@ Konfigurationsdateien der App geschrieben.</p>{inner}
             content = f"""<form method="post" action="/apps/{app['id']}/edit?section=basic">
 {ui.csrf_input(self.csrf)}<input type="hidden" name="section" value="basic">
 <div class="card"><h3>Basis-Einstellungen</h3>
-<p class="help" style="margin-bottom:14px">Für alle Apps gleich. Änderungen erstellen den
-Container neu (Daten bleiben erhalten).</p>
+<p class="help" style="margin-bottom:14px">Gilt für alle Apps. Änderungen erstellen den
+Container neu; die Daten bleiben erhalten.</p>
 <div class="grid g2">
 <div><div class="field"><label for="name">Name</label>
  <input id="name" name="name" value="{ui.esc(app['name'])}" required></div>
@@ -841,8 +824,7 @@ Container neu (Daten bleiben erhalten).</p>
             inst_rows = "<tr><td colspan='3' class='muted'>Noch keine Plugins installiert.</td></tr>"
 
         return f"""<div class="card"><h3>{ui.esc(config.get('label', 'Plugins'))} suchen</h3>
-<p class="help" style="margin-bottom:12px">Quelle wählen, suchen, hinzufügen — die App wird
-danach automatisch neu gestartet.</p>
+<p class="help" style="margin-bottom:12px">Nach jeder Änderung startet die App neu.</p>
 <form method="get" action="/apps/{app['id']}/edit" class="row" style="margin-bottom:14px">
 <input type="hidden" name="section" value="advanced">
 <select name="source" style="max-width:190px">{source_options}</select>
@@ -898,9 +880,7 @@ danach automatisch neu gestartet.</p>
             return self._redirect(target, ("err", str(exc)))
         return self._redirect(target)
 
-    # ==================================================================
     # Netzwerk / DNS / Speicher / Benutzer / Einstellungen
-    # ==================================================================
     def page_network(self):
         ifaces = sysinfo.interfaces()
         iface_rows = ""
@@ -1022,7 +1002,7 @@ danach automatisch neu gestartet.</p>
 <label class="check"><input type="checkbox" name="proxied" value="1">
 <span class="help" style="margin:0">Cloudflare-Proxy</span></label>
 <button class="btn primary" type="submit">Speichern</button></form>
-<p class="help">Tipp: Für neue Apps genügt ein A-Record auf {ui.esc(server_ip) or 'die Server-IP'}.</p>
+<p class="help">Für neue Apps genügt ein A-Record auf {ui.esc(server_ip) or 'die Server-IP'}.</p>
 </div>"""
         self._render("DNS", body, "/dns")
 
@@ -1098,7 +1078,7 @@ danach automatisch neu gestartet.</p>
 <h2>Daten der Apps</h2>
 <div class="card"><div class="tbl-wrap"><table>
 <tr><th>App</th><th>Pfad</th><th>Belegt</th></tr>{app_rows}</table></div>
-<p class="help">Das Laufwerk je App änderst du unter App → Einstellungen → Basis.</p></div>"""
+<p class="help">Laufwerk je App: unter App → Einstellungen → Basis.</p></div>"""
         self._render("Speicher", body, "/storage")
 
     def page_users(self):
@@ -1180,7 +1160,7 @@ danach automatisch neu gestartet.</p>
             cf_block = f"""<p>{state} &nbsp; <span class="muted">Konto:</span>
 <span class="mono">{ui.esc(store.get_setting('cf_account', '—'))}</span></p>
 <p class="help">Domains im Konto: <span class="mono">{ui.esc(zone_list)}</span></p>
-<p class="help">weblab benutzt einen selbst erzeugten Token, der ausschließlich DNS ändern darf.</p>
+<p class="help">Zugriff beschränkt auf DNS.</p>
 <form method="post" action="/settings" style="margin-top:10px">{ui.csrf_input(self.csrf)}
 <input type="hidden" name="action" value="cf_unlink">
 <button class="btn danger" type="submit"
@@ -1189,15 +1169,13 @@ danach automatisch neu gestartet.</p>
             client_id = store.get_setting("cf_client_id", "")
             redirect_uri = (f"https://{domain}/settings/cloudflare/callback" if domain
                             else "https://<deine-domain>/settings/cloudflare/callback")
-            cf_block = f"""<p class="help" style="margin-bottom:14px">Verknüpfe dein Cloudflare-Konto,
-damit weblab alle DNS-Einträge automatisch anlegt. Du musst <b>keinen Token selbst erstellen</b> —
-weblab besorgt sich den Zugang. Zwei Wege:</p>
+            cf_block = f"""<p class="help" style="margin-bottom:14px">Nach dem Verknüpfen werden DNS-Einträge
+automatisch angelegt. Zwei Wege:</p>
 <div class="grid g2">
-<div class="card" style="box-shadow:none">
+<div>
 <h3>1 · Mit Cloudflare anmelden</h3>
-<p class="help" style="margin-bottom:10px">Du wirst zu Cloudflare geleitet, meldest dich dort
-an und bestätigst den Zugriff — im Panel wird kein Passwort und kein Schlüssel eingegeben.
-Einmalig nötig: ein OAuth-Client in deinem Cloudflare-Konto
+<p class="help" style="margin-bottom:10px">Anmeldung direkt bei Cloudflare, ohne Zugangsdaten
+im Panel. Voraussetzung: ein OAuth-Client im Cloudflare-Konto
 (Konto verwalten → OAuth clients → Create client) mit dieser Rückleitung:</p>
 <p class="help mono" style="word-break:break-all;margin-bottom:10px">{ui.esc(redirect_uri)}</p>
 <form method="post" action="/settings">{ui.csrf_input(self.csrf)}
@@ -1208,11 +1186,10 @@ Einmalig nötig: ein OAuth-Client in deinem Cloudflare-Konto
 <div class="field"><label for="cf_client_secret">Client-Secret <span class="muted">(falls vergeben)</span></label>
  <input id="cf_client_secret" name="cf_client_secret" type="password" autocomplete="off"></div>
 <button class="btn primary" type="submit">Mit Cloudflare anmelden</button></form></div>
-<div class="card" style="box-shadow:none">
+<div>
 <h3>2 · Konto-Anmeldung <span class="pill">ohne Vorbereitung</span></h3>
-<p class="help" style="margin-bottom:10px">Einmalige Anmeldung mit Konto-E-Mail und
-Konto-Schlüssel. weblab erzeugt daraus selbst einen Token, der <b>nur DNS</b> darf. Der
-Schlüssel wird <b>nicht gespeichert</b>.</p>
+<p class="help" style="margin-bottom:10px">Einmalige Anmeldung mit E-Mail und Konto-Schlüssel.
+Daraus entsteht ein Token nur für DNS, gültig ein Jahr. Der Schlüssel wird nicht gespeichert.</p>
 <form method="post" action="/settings">{ui.csrf_input(self.csrf)}
 <input type="hidden" name="action" value="cf_link">
 <div class="field"><label for="cf_email">E-Mail des Kontos</label>
@@ -1233,10 +1210,8 @@ Schlüssel wird <b>nicht gespeichert</b>.</p>
  <p class="help">Der A-Record (@) muss auf {ui.esc(server_ip) or 'diesen Server'} zeigen.</p></div>
 <div class="field"><label for="server_ip">Server-IP</label>
  <input id="server_ip" name="server_ip" value="{ui.esc(server_ip)}">
- <p class="help">Leer lassen und speichern = automatisch neu ermitteln.</p></div>
-<button class="btn primary" type="submit">Speichern &amp; Proxy neu laden</button></form>
-<h3 style="margin-top:22px">Cloudflare-Konto</h3>
-{cf_block}</div>
+ <p class="help">Leer speichern ermittelt die IP neu.</p></div>
+<button class="btn primary" type="submit">Speichern &amp; Proxy neu laden</button></form></div>
 <div class="card"><h3>Katalog</h3>
 <p class="help" style="margin-bottom:12px">{len(connectors)} Connector-Dateien ·
 {len(catalog.groups())} Apps im Katalog.</p>
@@ -1248,6 +1223,8 @@ Schlüssel wird <b>nicht gespeichert</b>.</p>
 <button class="btn" type="submit">Katalog neu einlesen</button></form>
 <p class="help">Connector-Dateien liegen unter <code>{ui.esc(catalog.CONNECTOR_DIR)}</code>.</p></div>
 </div>
+<h2>Cloudflare-Konto</h2>
+<div class="card">{cf_block}</div>
 <h2>Status</h2>
 <div class="card"><dl class="kv">
 <dt>Docker</dt><dd>{'aktiv' if dockerctl.available() else 'nicht verfügbar'}</dd>
@@ -1306,9 +1283,7 @@ Schlüssel wird <b>nicht gespeichert</b>.</p>
         return self._redirect("/settings")
 
 
-    # ==================================================================
     # Cloudflare-Anmeldung (OAuth-Rückleitung)
-    # ==================================================================
     def cf_callback(self):
         query = self._query()
         if query.get("error"):
@@ -1327,9 +1302,7 @@ Schlüssel wird <b>nicht gespeichert</b>.</p>
         store.set_setting("cf_status", "verknüpft")
         return self._redirect("/settings", ("ok", "Cloudflare-Konto verknüpft."))
 
-    # ==================================================================
-    # Dateien einer App (eigenes Dateisystem je Webseite)
-    # ==================================================================
+    # Dateien einer App
     def _app_base(self, app):
         return appsvc.host_data_path(app, app["data_path"])
 
@@ -1405,7 +1378,7 @@ Schlüssel wird <b>nicht gespeichert</b>.</p>
         docroot = (connector or {}).get("data", {}).get("container_path", "/data")
         body = f"""<a href="/apps/{app_id}" class="muted">← {ui.esc(app['name'])}</a>
 <h1>Dateien</h1>
-<p class="sub">Eigenes Dateisystem dieser App · {used['files']} Dateien ·
+<p class="sub">{used['files']} {'Datei' if used['files'] == 1 else 'Dateien'} ·
 {ui.esc(sysinfo.human_bytes(used['bytes']))}</p>
 {self._app_tabs(app, 'Dateien')}
 <div class="card" style="margin-bottom:14px"><dl class="kv">

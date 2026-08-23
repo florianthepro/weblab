@@ -37,9 +37,6 @@ def http_json(url, method="GET", headers=None, data=None, timeout=25):
         return {"success": False, "errors": [{"message": str(exc)}]}
 
 
-# --------------------------------------------------------------------------
-# Reverse-Proxy (Caddy): Panel auf der Manage-Domain, je App eine Domain
-# --------------------------------------------------------------------------
 def render_caddyfile(manage_domain, app_routes, email=None):
     """app_routes: [{'domain':..., 'port':...}] — nur Apps mit Domain und http=true."""
     email = email or (f"admin@{manage_domain}" if manage_domain else "")
@@ -91,9 +88,6 @@ def write_caddy(manage_domain, app_routes, email=None):
     return content
 
 
-# --------------------------------------------------------------------------
-# Cloudflare-DNS
-# --------------------------------------------------------------------------
 CF_API = "https://api.cloudflare.com/client/v4"
 
 
@@ -175,9 +169,6 @@ class Cloudflare:
         return bool(resp.get("success")), None
 
 
-# --------------------------------------------------------------------------
-# Plugin-Quellen (Advanced-Bereich einer App)
-# --------------------------------------------------------------------------
 def search_plugins(source, query, loader=None, game_versions=None, limit=20):
     """Suche in einer Plugin-Quelle. Rückgabe: [{id,name,summary,author,downloads,url}]"""
     if source == "modrinth":
@@ -239,7 +230,7 @@ def plugin_download_url(source, project_id, loader=None, game_versions=None):
 
 
 def write_caddyfile_safe(manage_domain, app_routes, email=None):
-    """Wie write_caddy, wirft aber nicht — eine Proxy-Störung darf keine App-Aktion abbrechen."""
+    """Wie write_caddy, wirft aber nicht."""
     try:
         write_caddy(manage_domain, app_routes, email)
         return True, None
@@ -247,14 +238,8 @@ def write_caddyfile_safe(manage_domain, app_routes, email=None):
         return False, str(exc)
 
 
-# --------------------------------------------------------------------------
-# Cloudflare-Konto verknüpfen: Anmeldung -> weblab erzeugt selbst einen Token
-# --------------------------------------------------------------------------
-# Cloudflare bietet keinen OAuth-Login für fremde Anwendungen an. Der offizielle
-# Weg, einen Token OHNE Handarbeit im Dashboard zu erhalten, ist die einmalige
-# Anmeldung mit Konto-E-Mail + Konto-Schlüssel: damit legt weblab über die API
-# einen eng begrenzten Token (nur DNS) an. Der Konto-Schlüssel wird dabei NUR für
-# diesen einen Aufruf benutzt und niemals gespeichert.
+# Konto-Anmeldung: erzeugt über die API einen auf DNS begrenzten Token.
+# Der Konto-Schlüssel wird nur für diesen Aufruf benutzt und nicht gespeichert.
 DNS_PERMISSIONS = ("DNS Write", "Zone Read")
 FALLBACK_PERMISSION_IDS = {
     "DNS Write": "4755a26eedb94da69e1066d98aa820be",
@@ -329,12 +314,8 @@ def link_account(email, global_key, label="weblab"):
     return None, message
 
 
-# --------------------------------------------------------------------------
-# Cloudflare-Anmeldung per OAuth (Authorization Code + PKCE)
-# --------------------------------------------------------------------------
-# Cloudflare unterstützt für eigene (Dritt-)Anwendungen den Authorization-Code-Flow.
-# Der Betreiber legt einmalig im eigenen Cloudflare-Konto einen OAuth-Client an und
-# hinterlegt als Rückleitung: https://<verwaltungs-domain>/settings/cloudflare/callback
+# OAuth (Authorization Code + PKCE). Rückleitung:
+# https://<verwaltungs-domain>/settings/cloudflare/callback
 CF_AUTHORIZE = "https://dash.cloudflare.com/oauth2/auth"
 CF_TOKEN_URL = "https://dash.cloudflare.com/oauth2/token"
 CF_SCOPES = "dns_records:read dns_records:edit zone:read offline_access"

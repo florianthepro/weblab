@@ -16,7 +16,7 @@ class FileError(Exception):
 
 
 def resolve(base, relative):
-    """Pfad innerhalb von `base` auflösen — verhindert Ausbrüche über .. oder Links."""
+    """Pfad innerhalb von `base` auflösen; blockiert .. und Symlinks nach außen."""
     base_real = os.path.realpath(base)
     candidate = os.path.realpath(os.path.join(base_real, (relative or "").lstrip("/")))
     if candidate != base_real and not candidate.startswith(base_real + os.sep):
@@ -149,10 +149,7 @@ def usage(base):
 
 
 def parse_multipart(body, content_type):
-    """Minimaler multipart/form-data-Parser (nur Standardbibliothek).
-
-    Rückgabe: (felder, dateien) — dateien: [(feldname, dateiname, daten)]
-    """
+    """multipart/form-data lesen. Rückgabe: (felder, [(feld, dateiname, daten)])."""
     marker = "boundary="
     if marker not in content_type:
         raise FileError("Ungültiger Formulartyp.")

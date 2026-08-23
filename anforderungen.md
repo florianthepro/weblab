@@ -59,7 +59,7 @@ hinzufügen; Gesamtliste mit Löschen). Für Minecraft: Modrinth und SpigotMC.
 Apache und Nginx sind **beliebig oft** installierbar. Jede Installation ist eigenständig:
 eigener Container, eigener Port, **eigene Domain** und ein **eigenes Dateisystem**, das unter
 *App → Dateien* im Browser verwaltet wird (hochladen, bearbeiten, Ordner, löschen).
-Der Mailserver ist bewusst **einmalig** — seine Ports (25/143/465/587/993) stehen fest.
+Der Mailserver ist **einmalig** — seine Ports (25/143/465/587/993) stehen fest.
 
 ## Bereiche der Oberfläche
 - **Dashboard** — Auslastung des Geräts und Verbrauch je App (CPU/RAM/Netz), Status, Ports.
@@ -69,9 +69,9 @@ Der Mailserver ist bewusst **einmalig** — seine Ports (25/143/465/587/993) ste
 - **DNS** — Einträge der Verwaltungs-Domain anlegen/ersetzen/löschen.
 - **Speicher** — Dateisysteme, Laufwerke, Datenpfade und Belegung je App.
 - **Benutzer** — Konten anlegen/löschen, eigenes Passwort ändern.
-- **Einstellungen** — Domain, Server-IP, Cloudflare-Token, Katalog neu einlesen, Status.
+- **Einstellungen** — Domain, Server-IP, Cloudflare-Konto, Katalog, Status.
 
-## Bewusste Grenzen
-- Die Oberfläche ist auf Desktop ausgelegt (Tabellen/Übersicht), funktioniert aber responsiv.
-- „Ablageort: auf dem Gerät“ ist vorbereitet; ausgeführt werden Apps derzeit als Docker-Container.
-- Konfiguration ohne Secrets im Repo: alles Sensible entsteht erst beim Setup auf dem Server.
+## Grenzen
+- Auf Desktop ausgelegt, aber responsiv.
+- „Ablageort: auf dem Gerät“ ist vorbereitet; ausgeführt werden Apps als Docker-Container.
+- Keine Secrets im Repo — Zugangsdaten entstehen erst beim Setup auf dem Server.

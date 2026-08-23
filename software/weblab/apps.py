@@ -104,11 +104,11 @@ def fixed_ports(connector):
 
 
 def port_binding(exposure, host_port, container_port, protocol, connector=None):
-    """intern = nur 127.0.0.1, sonst auf allen Interfaces (Firewall regelt „spezifisch“)."""
+    """intern = nur 127.0.0.1, sonst auf allen Interfaces."""
     host = "127.0.0.1" if exposure == "internal" else "0.0.0.0"
     fixed = fixed_ports(connector or {})
     if fixed:
-        # Feste Dienste-Ports (Mail): Host-Port == Container-Port, sonst stimmen MX/Clients nicht.
+        # Host-Port == Container-Port, sonst stimmen MX-Einträge und Mailprogramme nicht.
         return [(f"{host}:{p['port']}", p["port"], p.get("protocol", "tcp")) for p in fixed]
     return [(f"{host}:{host_port}", container_port, protocol)]
 
@@ -198,7 +198,7 @@ def sync_proxy():
 
 
 def _ufw(*args):
-    """ufw aufrufen; fehlt ufw oder schlägt es fehl, ist das kein Abbruchgrund."""
+    """ufw aufrufen; ein Fehlschlag ist kein Abbruchgrund."""
     try:
         subprocess.run(["ufw", *args], capture_output=True, text=True, timeout=30)
         return True
@@ -211,7 +211,7 @@ def _cidr_list(app):
 
 
 def apply_firewall(app, connector=None):
-    """„Spezifisch“ = Ports nur für erlaubte CIDRs öffnen, sonst offen/geschlossen."""
+    """Ports je nach Erreichbarkeit freigeben."""
     connector = connector or catalog.get(app["connector_id"]) or {}
     for port, proto in app_ports(app, connector):
         _ufw("--force", "delete", "allow", f"{port}/{proto}")
@@ -288,7 +288,7 @@ def install(connector_id, form):
         cpu=app["cpu"], ram_mb=app["ram_mb"], network=app["network"],
         hostname=container_hostname(connector, values),
     )
-    # Nachbereitung: Fehler hier machen die App nicht ungültig (Container läuft bereits).
+    # Der Container läuft bereits — Fehler hier werden gemeldet, nicht geworfen.
     app["warnings"] = []
     def dns_step():
         done, problem = apply_dns(app, connector, values)
@@ -332,11 +332,7 @@ def run_post_install_commands(app, connector, values):
 
 
 def write_init_files(app, connector, values):
-    """Startdateien aus dem Connector anlegen (z. B. index.html einer Webseite).
-
-    Wird nur geschrieben, wenn die Datei noch nicht existiert — vorhandene
-    Webseiten-Dateien werden nie überschrieben.
-    """
+    """Startdateien aus dem Connector anlegen. Vorhandene Dateien bleiben unberührt."""
     base = host_data_path(app, app["data_path"])
     written = []
     for spec in connector.get("init_files") or []:
@@ -351,7 +347,7 @@ def write_init_files(app, connector, values):
         fields["app_name"] = app["name"]
         fields["domain"] = app.get("domain") or ""
         if rel.lower().endswith((".html", ".htm", ".php")):
-            # Werte landen in Web-Dateien -> maskieren, damit Sonderzeichen nichts zerlegen.
+            # Werte landen in Web-Dateien -> maskieren.
             fields = {k: html.escape(str(v), quote=True) if isinstance(v, str) else v
                       for k, v in fields.items()}
         try:
@@ -459,7 +455,7 @@ def update(app_id, form, section="basic"):
             if connector.get("data") else [],
             cpu=app["cpu"], ram_mb=app["ram_mb"], network=app["network"],
         )
-        # Konfigdateien im Container gehen beim Neuerstellen verloren -> erneut schreiben.
+        # Konfigdateien im Container gehen beim Neuerstellen verloren.
         write_init_files(app, connector, app["values"])
         apply_config_files(app, connector, app["values"])
         apply_firewall(app, connector)

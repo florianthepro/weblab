@@ -5,29 +5,69 @@
   "version": "16",
   "category": "Datenbanken",
   "icon": "🐘",
-  "summary": "PostgreSQL-Datenbank — standardmäßig nur intern erreichbar.",
-  "description": "Relationale Datenbank. Empfohlene Erreichbarkeit: intern (nur für andere Apps auf diesem Server).",
+  "summary": "PostgreSQL-Datenbank, standardmäßig nur intern erreichbar.",
+  "description": "Relationale Datenbank. Empfohlene Erreichbarkeit: intern.",
   "runtime": "docker",
   "image": "postgres:16-alpine",
   "container_port": 5432,
   "protocol": "tcp",
   "http": false,
   "default_exposure": "internal",
-  "data": {"container_path": "/var/lib/postgresql/data", "label": "Datenbank-Dateien"},
+  "data": {
+    "container_path": "/var/lib/postgresql/data",
+    "label": "Datenbank-Dateien"
+  },
   "env": {},
   "fields": {
     "required": [
-      {"key": "db_name", "label": "Datenbank-Name", "type": "string", "default": "app", "required": true,
-       "target": {"kind": "env", "name": "POSTGRES_DB"}},
-      {"key": "db_user", "label": "Benutzer", "type": "string", "default": "app", "required": true,
-       "target": {"kind": "env", "name": "POSTGRES_USER"}},
-      {"key": "db_password", "label": "Passwort", "type": "password", "required": true, "generate": true,
-       "help": "Leer lassen = sicheres Passwort wird erzeugt.",
-       "target": {"kind": "env", "name": "POSTGRES_PASSWORD"}}
+      {
+        "key": "db_name",
+        "label": "Datenbank-Name",
+        "type": "string",
+        "default": "app",
+        "required": true,
+        "target": {
+          "kind": "env",
+          "name": "POSTGRES_DB"
+        }
+      },
+      {
+        "key": "db_user",
+        "label": "Benutzer",
+        "type": "string",
+        "default": "app",
+        "required": true,
+        "target": {
+          "kind": "env",
+          "name": "POSTGRES_USER"
+        }
+      },
+      {
+        "key": "db_password",
+        "label": "Passwort",
+        "type": "password",
+        "required": true,
+        "generate": true,
+        "help": "Leer lassen = sicheres Passwort wird erzeugt.",
+        "target": {
+          "kind": "env",
+          "name": "POSTGRES_PASSWORD"
+        }
+      }
     ],
     "specific": [
-      {"key": "max_connections", "label": "Max. Verbindungen", "type": "number", "default": 100, "min": 10, "max": 1000,
-       "target": {"kind": "env", "name": "POSTGRES_MAX_CONNECTIONS"}}
+      {
+        "key": "max_connections",
+        "label": "Max. Verbindungen",
+        "type": "number",
+        "default": 100,
+        "min": 10,
+        "max": 1000,
+        "target": {
+          "kind": "env",
+          "name": "POSTGRES_MAX_CONNECTIONS"
+        }
+      }
     ]
   },
   "advanced": {}

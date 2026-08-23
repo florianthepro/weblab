@@ -116,7 +116,7 @@ def verify_user(username, password):
     with connect() as conn:
         row = conn.execute("SELECT * FROM users WHERE username=?", (username,)).fetchone()
     if not row:
-        # Konstante Laufzeit: trotzdem hashen.
+        # Gleiche Laufzeit wie bei vorhandenem Benutzer.
         hash_password(password, "decoy-salt-000000")
         return None
     digest, _ = hash_password(password, row["pw_salt"])

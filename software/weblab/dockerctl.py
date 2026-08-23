@@ -1,4 +1,4 @@
-"""Docker-Steuerung über die CLI (keine externen Python-Abhängigkeiten)."""
+"""Docker-Steuerung über die CLI."""
 import json
 import shlex
 import subprocess
@@ -77,7 +77,7 @@ def stats():
 
 def run_container(slug, image, env=None, ports=None, volumes=None, cpu=None,
                   ram_mb=None, network=None, restart="unless-stopped", hostname=None):
-    """Container (neu) starten. Ein bestehender gleichen Namens wird ersetzt."""
+    """Container starten; ein bestehender gleichen Namens wird ersetzt."""
     remove(slug, missing_ok=True)
     args = ["run", "-d", "--name", container_name(slug),
             "--label", f"{LABEL}={slug}", "--restart", restart]

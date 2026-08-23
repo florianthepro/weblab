@@ -5,42 +5,149 @@
   "version": "1.21.5",
   "category": "Spiele",
   "icon": "⛏️",
-  "summary": "Minecraft Java Server (Paper) — Plugins, Welten, volle Kontrolle.",
+  "summary": "Minecraft-Server (Paper) mit Plugin-Verwaltung.",
   "description": "Paper-basierter Minecraft-Server für die Java Edition. Unterstützt Plugins (Modrinth/Spiget), eigene Welten und alle server.properties-Einstellungen.",
   "runtime": "docker",
   "image": "itzg/minecraft-server:java21",
   "container_port": 25565,
   "protocol": "tcp",
   "http": false,
-  "data": {"container_path": "/data", "label": "Weltdaten"},
-  "env": {"EULA": "TRUE", "TYPE": "PAPER", "VERSION": "1.21.5", "USE_AIKAR_FLAGS": "true"},
+  "data": {
+    "container_path": "/data",
+    "label": "Weltdaten"
+  },
+  "env": {
+    "EULA": "TRUE",
+    "TYPE": "PAPER",
+    "VERSION": "1.21.5",
+    "USE_AIKAR_FLAGS": "true"
+  },
   "fields": {
     "required": [
-      {"key": "ram_gb", "label": "RAM (GB)", "type": "number", "default": 4, "min": 1, "max": 64, "required": true,
-       "help": "Arbeitsspeicher für die Java-VM des Servers.",
-       "target": {"kind": "env", "name": "MEMORY", "format": "{value}G"}},
-      {"key": "max_players", "label": "Max. Spieler", "type": "number", "default": 20, "min": 1, "max": 500, "required": true,
-       "target": {"kind": "file_line", "file": "/data/server.properties", "prefix": "max-players="}}
+      {
+        "key": "ram_gb",
+        "label": "RAM (GB)",
+        "type": "number",
+        "default": 4,
+        "min": 1,
+        "max": 64,
+        "required": true,
+        "help": "Arbeitsspeicher für die Java-VM des Servers.",
+        "target": {
+          "kind": "env",
+          "name": "MEMORY",
+          "format": "{value}G"
+        }
+      },
+      {
+        "key": "max_players",
+        "label": "Max. Spieler",
+        "type": "number",
+        "default": 20,
+        "min": 1,
+        "max": 500,
+        "required": true,
+        "target": {
+          "kind": "file_line",
+          "file": "/data/server.properties",
+          "prefix": "max-players="
+        }
+      }
     ],
     "specific": [
-      {"key": "motd", "label": "MOTD (Server-Beschreibung)", "type": "string", "default": "Ein weblab Server",
-       "help": "Text in der Serverliste des Spielers.",
-       "target": {"kind": "file_line", "file": "/data/server.properties", "prefix": "motd="}},
-      {"key": "gamemode", "label": "Spielmodus", "type": "select", "default": "survival",
-       "options": ["survival", "creative", "adventure", "spectator"],
-       "target": {"kind": "file_line", "file": "/data/server.properties", "prefix": "gamemode="}},
-      {"key": "difficulty", "label": "Schwierigkeit", "type": "select", "default": "normal",
-       "options": ["peaceful", "easy", "normal", "hard"],
-       "target": {"kind": "file_line", "file": "/data/server.properties", "prefix": "difficulty="}},
-      {"key": "pvp", "label": "PvP erlauben", "type": "bool", "default": true,
-       "target": {"kind": "file_line", "file": "/data/server.properties", "prefix": "pvp="}},
-      {"key": "online_mode", "label": "Online-Modus (Mojang-Auth)", "type": "bool", "default": true,
-       "help": "Aus = auch Offline-Accounts dürfen joinen (unsicher).",
-       "target": {"kind": "file_line", "file": "/data/server.properties", "prefix": "online-mode="}},
-      {"key": "view_distance", "label": "Sichtweite (Chunks)", "type": "number", "default": 10, "min": 3, "max": 32,
-       "target": {"kind": "file_line", "file": "/data/server.properties", "prefix": "view-distance="}},
-      {"key": "whitelist", "label": "Whitelist aktiv", "type": "bool", "default": false,
-       "target": {"kind": "file_line", "file": "/data/server.properties", "prefix": "white-list="}}
+      {
+        "key": "motd",
+        "label": "MOTD (Server-Beschreibung)",
+        "type": "string",
+        "default": "Ein weblab Server",
+        "help": "Text in der Serverliste des Spielers.",
+        "target": {
+          "kind": "file_line",
+          "file": "/data/server.properties",
+          "prefix": "motd="
+        }
+      },
+      {
+        "key": "gamemode",
+        "label": "Spielmodus",
+        "type": "select",
+        "default": "survival",
+        "options": [
+          "survival",
+          "creative",
+          "adventure",
+          "spectator"
+        ],
+        "target": {
+          "kind": "file_line",
+          "file": "/data/server.properties",
+          "prefix": "gamemode="
+        }
+      },
+      {
+        "key": "difficulty",
+        "label": "Schwierigkeit",
+        "type": "select",
+        "default": "normal",
+        "options": [
+          "peaceful",
+          "easy",
+          "normal",
+          "hard"
+        ],
+        "target": {
+          "kind": "file_line",
+          "file": "/data/server.properties",
+          "prefix": "difficulty="
+        }
+      },
+      {
+        "key": "pvp",
+        "label": "PvP erlauben",
+        "type": "bool",
+        "default": true,
+        "target": {
+          "kind": "file_line",
+          "file": "/data/server.properties",
+          "prefix": "pvp="
+        }
+      },
+      {
+        "key": "online_mode",
+        "label": "Online-Modus (Mojang-Auth)",
+        "type": "bool",
+        "default": true,
+        "help": "Aus = auch Offline-Accounts dürfen joinen (unsicher).",
+        "target": {
+          "kind": "file_line",
+          "file": "/data/server.properties",
+          "prefix": "online-mode="
+        }
+      },
+      {
+        "key": "view_distance",
+        "label": "Sichtweite (Chunks)",
+        "type": "number",
+        "default": 10,
+        "min": 3,
+        "max": 32,
+        "target": {
+          "kind": "file_line",
+          "file": "/data/server.properties",
+          "prefix": "view-distance="
+        }
+      },
+      {
+        "key": "whitelist",
+        "label": "Whitelist aktiv",
+        "type": "bool",
+        "default": false,
+        "target": {
+          "kind": "file_line",
+          "file": "/data/server.properties",
+          "prefix": "white-list="
+        }
+      }
     ]
   },
   "advanced": {
@@ -50,8 +157,18 @@
       "path": "/data/plugins",
       "restart_after_change": true,
       "sources": [
-        {"id": "modrinth", "name": "Modrinth", "loader": "paper", "game_versions": ["1.21.5"]},
-        {"id": "spiget", "name": "SpigotMC"}
+        {
+          "id": "modrinth",
+          "name": "Modrinth",
+          "loader": "paper",
+          "game_versions": [
+            "1.21.5"
+          ]
+        },
+        {
+          "id": "spiget",
+          "name": "SpigotMC"
+        }
       ]
     }
   }
