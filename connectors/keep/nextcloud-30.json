@@ -1,0 +1,68 @@
+{
+  "id": "nextcloud-30",
+  "group": "nextcloud",
+  "name": "Nextcloud",
+  "version": "30",
+  "category": "Cloud",
+  "icon": "☁️",
+  "summary": "Eigene Cloud: Dateien, Kalender, Kontakte, Fotos.",
+  "description": "Self-hosted Cloud-Speicher mit Dateien, Kalender, Kontakten und Apps. Nutzt SQLite (für kleine Installationen) — für größere eine separate Datenbank anbinden.",
+  "runtime": "docker",
+  "image": "nextcloud:30-apache",
+  "container_port": 80,
+  "protocol": "tcp",
+  "http": true,
+  "default_exposure": "external",
+  "data": {
+    "container_path": "/var/www/html",
+    "label": "Nextcloud-Daten"
+  },
+  "env": {
+    "OVERWRITEPROTOCOL": "https",
+    "TRUSTED_PROXIES": "172.16.0.0/12",
+    "APACHE_DISABLE_REWRITE_IP": "1"
+  },
+  "notes": [
+    "Erste Anmeldung mit dem hier gesetzten Admin-Konto. Als „Erreichbar über“-Domain und Trusted-Domain dieselbe Adresse verwenden."
+  ],
+  "fields": {
+    "required": [
+      {
+        "key": "trusted_domain",
+        "label": "Domain (Trusted Domain)",
+        "type": "string",
+        "required": true,
+        "help": "Die Domain, unter der Nextcloud läuft (z. B. cloud.example.com).",
+        "target": {
+          "kind": "env",
+          "name": "NEXTCLOUD_TRUSTED_DOMAINS"
+        }
+      },
+      {
+        "key": "admin_user",
+        "label": "Admin-Benutzer",
+        "type": "string",
+        "default": "admin",
+        "required": true,
+        "target": {
+          "kind": "env",
+          "name": "NEXTCLOUD_ADMIN_USER"
+        }
+      },
+      {
+        "key": "admin_password",
+        "label": "Admin-Passwort",
+        "type": "password",
+        "required": true,
+        "generate": true,
+        "help": "Leer lassen = sicheres Passwort wird erzeugt.",
+        "target": {
+          "kind": "env",
+          "name": "NEXTCLOUD_ADMIN_PASSWORD"
+        }
+      }
+    ],
+    "specific": []
+  },
+  "advanced": {}
+}

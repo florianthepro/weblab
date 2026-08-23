@@ -1,0 +1,29 @@
+{
+  "id": "it-tools-2024",
+  "group": "it-tools",
+  "name": "IT-Tools",
+  "version": "2024",
+  "category": "Werkzeuge",
+  "icon": "🧰",
+  "summary": "Sammlung praktischer Entwickler-/IT-Werkzeuge im Browser.",
+  "description": "Viele kleine Helfer (Formatierer, Konverter, Generatoren) in einer Oberfläche. Ohne Anmeldung — bei Bedarf auf erlaubte IPs beschränken.",
+  "runtime": "docker",
+  "image": "corentinth/it-tools:latest",
+  "container_port": 80,
+  "protocol": "tcp",
+  "http": true,
+  "default_exposure": "external",
+  "data": {
+    "container_path": "/tmp/it-tools",
+    "label": "—"
+  },
+  "env": {},
+  "notes": [
+    "Keine Anmeldung — bei sensiblem Einsatz Erreichbarkeit auf „Spezifisch“ beschränken."
+  ],
+  "fields": {
+    "required": [],
+    "specific": []
+  },
+  "advanced": {}
+}

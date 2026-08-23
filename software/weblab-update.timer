@@ -1,0 +1,11 @@
+[Unit]
+Description=weblab Auto-Update (regelmäßige Prüfung)
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=6h
+RandomizedDelaySec=30min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

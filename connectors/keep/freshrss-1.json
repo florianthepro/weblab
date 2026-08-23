@@ -1,0 +1,30 @@
+{
+  "id": "freshrss-1",
+  "group": "freshrss",
+  "name": "FreshRSS",
+  "version": "1",
+  "category": "Werkzeuge",
+  "icon": "📰",
+  "summary": "RSS-Reader für Nachrichten und Feeds.",
+  "description": "Self-hosted RSS-Aggregator. Beim ersten Aufruf legst du Konto und Datenbank (SQLite) an.",
+  "runtime": "docker",
+  "image": "lscr.io/linuxserver/freshrss:latest",
+  "container_port": 80,
+  "protocol": "tcp",
+  "http": true,
+  "default_exposure": "external",
+  "data": {
+    "container_path": "/config",
+    "label": "FreshRSS-Daten"
+  },
+  "env": {
+    "PUID": "1000",
+    "PGID": "1000",
+    "TZ": "Europe/Berlin"
+  },
+  "fields": {
+    "required": [],
+    "specific": []
+  },
+  "advanced": {}
+}

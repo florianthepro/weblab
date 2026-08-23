@@ -1,0 +1,29 @@
+{
+  "id": "jellyfin-10",
+  "group": "jellyfin",
+  "name": "Jellyfin",
+  "version": "10",
+  "category": "Medien",
+  "icon": "🎬",
+  "summary": "Medienserver für Filme, Serien und Musik im Browser.",
+  "description": "Freier Medienserver. Beim ersten Aufruf richtest du das Konto ein. Medien legst du unter „Dateien“ in einen Unterordner (z. B. media) und fügst ihn in Jellyfin als Bibliothek hinzu.",
+  "runtime": "docker",
+  "image": "jellyfin/jellyfin:10.9.11",
+  "container_port": 8096,
+  "protocol": "tcp",
+  "http": true,
+  "default_exposure": "external",
+  "data": {
+    "container_path": "/config",
+    "label": "Konfiguration + Medien"
+  },
+  "env": {},
+  "notes": [
+    "Für Fernzugriff eine eigene Domain verwenden. Medien liegen im Datenordner (Unterordner anlegen und in Jellyfin als Bibliothek hinzufügen)."
+  ],
+  "fields": {
+    "required": [],
+    "specific": []
+  },
+  "advanced": {}
+}

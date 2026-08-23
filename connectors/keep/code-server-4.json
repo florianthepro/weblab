@@ -1,0 +1,46 @@
+{
+  "id": "code-server-4",
+  "group": "code-server",
+  "name": "code-server",
+  "version": "4",
+  "category": "Werkzeuge",
+  "icon": "💻",
+  "summary": "VS Code im Browser — Entwickeln von überall.",
+  "description": "Visual Studio Code als Weboberfläche. Zugang mit dem hier gesetzten Passwort.",
+  "runtime": "docker",
+  "image": "lscr.io/linuxserver/code-server:latest",
+  "container_port": 8443,
+  "protocol": "tcp",
+  "http": true,
+  "default_exposure": "external",
+  "data": {
+    "container_path": "/config",
+    "label": "Arbeitsbereich + Einstellungen"
+  },
+  "env": {
+    "PUID": "1000",
+    "PGID": "1000",
+    "TZ": "Europe/Berlin"
+  },
+  "notes": [
+    "Nur über HTTPS mit eigener Domain betreiben."
+  ],
+  "fields": {
+    "required": [
+      {
+        "key": "password",
+        "label": "Zugangs-Passwort",
+        "type": "password",
+        "required": true,
+        "generate": true,
+        "help": "Leer lassen = sicheres Passwort wird erzeugt.",
+        "target": {
+          "kind": "env",
+          "name": "PASSWORD"
+        }
+      }
+    ],
+    "specific": []
+  },
+  "advanced": {}
+}

@@ -50,6 +50,17 @@ fi
 find "$TARGET" -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null || true
 chmod 700 /var/lib/weblab
 
+# Version festhalten (für Anzeige + Auto-Update-Vergleich).
+if command -v git >/dev/null 2>&1 && git -C "$REPO_ROOT" rev-parse --short HEAD >/dev/null 2>&1; then
+  printf '%s (%s)\n' "$(git -C "$REPO_ROOT" rev-parse --short HEAD)" "$(date -u +%F)" >"$TARGET/VERSION"
+fi
+
+echo "== Auto-Update (Timer) =="
+cp "$HERE/update.sh" "$TARGET/update.sh"
+chmod +x "$TARGET/update.sh"
+cp "$HERE/weblab-update.service" /etc/systemd/system/weblab-update.service
+cp "$HERE/weblab-update.timer" /etc/systemd/system/weblab-update.timer
+
 echo "== Ports 80/443 freimachen (Reste früherer Installationen) =="
 if systemctl is-active --quiet docker; then
   ids="$( { docker ps -q --filter publish=80; docker ps -q --filter publish=443; } 2>/dev/null | sort -u )"
@@ -74,6 +85,10 @@ cp "$HERE/weblab.service" /etc/systemd/system/weblab.service
 systemctl daemon-reload
 systemctl enable weblab >/dev/null 2>&1 || true
 systemctl restart weblab
+# Auto-Update-Timer aktivieren (sofern nicht ausdrücklich abgeschaltet).
+if [ ! -f /var/lib/weblab/autoupdate-off ]; then
+  systemctl enable --now weblab-update.timer >/dev/null 2>&1 || true
+fi
 sleep 2
 
 echo "== Status =="

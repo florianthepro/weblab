@@ -5,6 +5,7 @@ import json
 import os
 import re
 import secrets
+import subprocess
 import threading
 import time
 import urllib.parse
@@ -33,6 +34,41 @@ SETUP_STATE = {"running": False, "percent": 0, "step": "", "done": False, "error
 # Laufende Cloudflare-Anmeldung (OAuth)
 CF_LOGIN = {"state": "", "verifier": "", "client_id": "", "client_secret": "",
             "redirect_uri": ""}
+
+# Auto-Update
+VERSION_FILE = os.environ.get("WEBLAB_VERSION_FILE", "/opt/weblab/VERSION")
+UPDATE_STAMP = "/var/lib/weblab/last-update"
+AUTOUPDATE_OFF = "/var/lib/weblab/autoupdate-off"
+UPDATE_TIMER = "weblab-update.timer"
+
+
+def weblab_version():
+    try:
+        with open(VERSION_FILE, encoding="utf-8") as fh:
+            return fh.read().strip() or "unbekannt"
+    except OSError:
+        return "unbekannt"
+
+
+def _systemctl(*args, timeout=20, no_block=False):
+    cmd = ["systemctl"] + (["--no-block"] if no_block else []) + list(args)
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def autoupdate_enabled():
+    result = _systemctl("is-enabled", UPDATE_TIMER)
+    return bool(result and result.stdout.strip() == "enabled")
+
+
+def last_update_check():
+    try:
+        with open(UPDATE_STAMP, encoding="utf-8") as fh:
+            return fh.read().strip()
+    except OSError:
+        return ""
 
 
 # Sitzungen (signierte Cookies) + CSRF
@@ -1305,6 +1341,7 @@ Daraus entsteht ein Token nur für DNS, gültig ein Jahr. Der Schlüssel wird ni
         domain = store.get_setting("manage_domain", "")
         server_ip = store.get_setting("server_ip", "")
         connectors = catalog.load_all()
+        au_on = autoupdate_enabled()
 
         body = f"""<h1>Einstellungen</h1>
 <p class="sub">Domain, Server und Katalog. DNS-Konto unter Netzwerk.</p>
@@ -1330,6 +1367,24 @@ Daraus entsteht ein Token nur für DNS, gültig ein Jahr. Der Schlüssel wird ni
 <button class="btn" type="submit">Katalog neu einlesen</button></form>
 <p class="help">Connector-Dateien liegen unter <code>{ui.esc(catalog.CONNECTOR_DIR)}</code>.</p></div>
 </div>
+<h2>Aktualisierung</h2>
+<div class="card">
+<dl class="kv">
+<dt>Version</dt><dd class="mono">{ui.esc(weblab_version())}</dd>
+<dt>Automatische Updates</dt><dd>{'ein' if au_on else 'aus'}</dd>
+<dt>Letzte Prüfung</dt><dd class="mono">{ui.esc(last_update_check()) or '—'}</dd>
+</dl>
+<p class="help" style="margin:6px 0 12px">Prüft regelmäßig das öffentliche Repo und
+installiert neue Versionen automatisch.</p>
+<div class="row">
+<form method="post" action="/settings">{ui.csrf_input(self.csrf)}
+<input type="hidden" name="action" value="update_now">
+<button class="btn primary" type="submit">Jetzt prüfen &amp; aktualisieren</button></form>
+<form method="post" action="/settings">{ui.csrf_input(self.csrf)}
+<input type="hidden" name="action" value="autoupdate">
+<input type="hidden" name="enabled" value="{'0' if au_on else '1'}">
+<button class="btn" type="submit">{'Automatische Updates ausschalten' if au_on else 'Automatische Updates einschalten'}</button></form>
+</div></div>
 <h2>Status</h2>
 <div class="card"><dl class="kv">
 <dt>Docker</dt><dd>{'aktiv' if dockerctl.available() else 'nicht verfügbar'}</dd>
@@ -1343,6 +1398,25 @@ Daraus entsteht ein Token nur für DNS, gültig ein Jahr. Der Schlüssel wird ni
         if action == "reload_catalog":
             catalog.load_all(force=True)
             return self._redirect("/settings", ("ok", "Katalog neu eingelesen."))
+        if action == "update_now":
+            _systemctl("start", UPDATE_TIMER.replace(".timer", ".service"), no_block=True)
+            return self._redirect("/settings",
+                                  ("ok", "Update gestartet — läuft im Hintergrund."))
+        if action == "autoupdate":
+            enable = form.get("enabled") == "1"
+            if enable:
+                try:
+                    os.remove(AUTOUPDATE_OFF)
+                except OSError:
+                    pass
+                _systemctl("enable", "--now", UPDATE_TIMER)
+                return self._redirect("/settings", ("ok", "Automatische Updates eingeschaltet."))
+            _systemctl("disable", "--now", UPDATE_TIMER)
+            try:
+                open(AUTOUPDATE_OFF, "w").close()
+            except OSError:
+                pass
+            return self._redirect("/settings", ("ok", "Automatische Updates ausgeschaltet."))
         if action == "general":
             domain = (form.get("manage_domain") or "").strip().lower().lstrip("@.")
             store.set_setting("manage_domain", domain)
