@@ -21,12 +21,14 @@ def set_domain(domain, ip=None):
     store.init()
     store.set_setting("manage_domain", domain)
     store.set_setting("server_ip", ip or sysinfo.public_ip())
-    routes = []
+    routes, panel_hosts = [], []
     for app in store.list_apps():
+        if app.get("manage_host"):
+            panel_hosts.append(app["manage_host"])
         connector = catalog.get(app["connector_id"])
         if connector and connector.get("http") and app.get("domain"):
             routes.append({"domain": app["domain"], "port": app["host_port"], "name": app["name"]})
-    ok, err = integrations.write_caddyfile_safe(domain, routes)
+    ok, err = integrations.write_caddyfile_safe(domain, routes, panel_hosts=panel_hosts)
     print(f"Domain: {domain}")
     print(f"Server-IP: {store.get_setting('server_ip')}")
     print(f"Proxy geschrieben: {ok}{'' if ok else ' — ' + str(err)}")
