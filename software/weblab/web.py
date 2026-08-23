@@ -37,40 +37,29 @@ SETUP_STATE = {"running": False, "percent": 0, "step": "", "done": False, "error
 CF_LOGIN = {"state": "", "verifier": "", "client_id": "", "client_secret": "",
             "redirect_uri": ""}
 
-# Auto-Update
-VERSION_FILE = os.environ.get("WEBLAB_VERSION_FILE", "/opt/weblab/VERSION")
-UPDATE_STAMP = "/var/lib/weblab/last-update"
-AUTOUPDATE_OFF = "/var/lib/weblab/autoupdate-off"
-UPDATE_TIMER = "weblab-update.timer"
+# Neue/aktualisierte Connectoren erkennen
+CONNECTOR_NEW_DAYS = 14
 
 
-def weblab_version():
+def connector_news():
+    """IDs von Connectoren, die seit Kurzem neu oder in neuer Version da sind."""
     try:
-        with open(VERSION_FILE, encoding="utf-8") as fh:
-            return fh.read().strip() or "unbekannt"
-    except OSError:
-        return "unbekannt"
-
-
-def _systemctl(*args, timeout=20, no_block=False):
-    cmd = ["systemctl"] + (["--no-block"] if no_block else []) + list(args)
-    try:
-        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
-    except (OSError, subprocess.SubprocessError):
-        return None
-
-
-def autoupdate_enabled():
-    result = _systemctl("is-enabled", UPDATE_TIMER)
-    return bool(result and result.stdout.strip() == "enabled")
-
-
-def last_update_check():
-    try:
-        with open(UPDATE_STAMP, encoding="utf-8") as fh:
-            return fh.read().strip()
-    except OSError:
-        return ""
+        known = json.loads(store.get_setting("connectors_seen", "") or "{}")
+    except (ValueError, json.JSONDecodeError):
+        known = {}
+    current = {f"{c['id']}@{c['version']}" for c in catalog.load_all()}
+    first_run, now, changed = not known, time.time(), False
+    for key in current:
+        if key not in known:
+            known[key] = 0 if first_run else now   # Erstlauf ist der Grundstand
+            changed = True
+    for key in [k for k in known if k not in current]:
+        del known[key]
+        changed = True
+    if changed:
+        store.set_setting("connectors_seen", json.dumps(known))
+    return {k.split("@")[0] for k, ts in known.items()
+            if ts and now - ts < CONNECTOR_NEW_DAYS * 86400}
 
 
 # Sitzungen (signierte Cookies) + CSRF
@@ -186,8 +175,11 @@ class Handler(BaseHTTPRequestHandler):
         headers = {"Location": location}
         if flash:
             kind, text = flash
-            value = urllib.parse.quote(f"{kind}|{text}")
-            headers["Set-Cookie"] = f"weblab_flash={value}; Path=/; Max-Age=20; SameSite=Strict"
+            if kind == "err":
+                store.set_setting("banner", text)      # bleibt bis zum Schließen
+            else:
+                value = urllib.parse.quote(f"{kind}|{text}")
+                headers["Set-Cookie"] = f"weblab_flash={value}; Path=/; Max-Age=20; SameSite=Strict"
         self._send("", 303, "text/plain", headers)
 
     @property
@@ -226,7 +218,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def _render(self, title, body, active="/", head=""):
         user = (self.session or {}).get("user")
-        page = ui.page(title, body, active=active, user=user, flash=self._take_flash(), head=head)
+        page = ui.page(title, body, active=active, user=user, flash=self._take_flash(), head=head,
+                       banner=ui.banner_html(store.get_setting("banner", ""), self.csrf))
         self._send(page, headers={"Set-Cookie": "weblab_flash=; Path=/; Max-Age=0"})
 
     def _require_auth(self):
@@ -314,7 +307,7 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/users":
             return self.page_users()
         if path == "/settings":
-            return self.page_settings()
+            return self._redirect("/network")
         if path == "/network/cloudflare/callback":
             return self.cf_callback()
         return self._send(ui.page("Nicht gefunden", "<h1>404</h1><p class='sub'>Seite gibt es nicht.</p>",
@@ -358,8 +351,9 @@ class Handler(BaseHTTPRequestHandler):
             return self.do_network(form)
         if path == "/users":
             return self.do_users(form)
-        if path == "/settings":
-            return self.do_settings(form)
+        if path == "/banner":
+            store.set_setting("banner", "")
+            return self._redirect(self.headers.get("Referer", "/"))
         return self._redirect("/")
 
     # Setup + Login
@@ -370,7 +364,7 @@ class Handler(BaseHTTPRequestHandler):
         body = f"""<div class="box">
 <div class="card">
 <h1>weblab einrichten</h1>
-<p class="sub">Admin-Konto anlegen und die Verwaltungs-Domain festlegen.</p>
+<p class="sub">Konto und Domain festlegen.</p>
 <div class="steps"><div class="on">1 · Konto &amp; Domain</div><div>2 · Einrichtung</div><div>3 · Fertig</div></div>
 <form method="post" action="/setup">
  <div class="field"><label for="username">Admin-Benutzer</label>
@@ -383,11 +377,6 @@ class Handler(BaseHTTPRequestHandler):
  <div class="field"><label for="domain">Verwaltungs-Domain</label>
   <input id="domain" name="domain" placeholder="example.com" required>
   <p class="help">Der A-Record (@) dieser Domain muss auf diesen Server zeigen{f' ({ui.esc(server_ip)})' if server_ip else ''}.</p></div>
- <div class="field"><label for="cf_email">Cloudflare-Konto <span class="muted">optional</span></label>
-  <input id="cf_email" name="cf_email" type="email" placeholder="E-Mail" autocomplete="off">
-  <input id="cf_key" name="cf_key" type="password" placeholder="Konto-Schlüssel" autocomplete="off" style="margin-top:8px">
-  <p class="help">Legt DNS-Einträge automatisch an. Erzeugt einen Token nur für DNS;
-  der Konto-Schlüssel wird nicht gespeichert. Auch später unter Einstellungen möglich.</p></div>
  <button class="btn primary" type="submit" style="width:100%">Einrichtung starten</button>
 </form></div></div>"""
         self._send(ui.bare("Einrichten", body))
@@ -400,8 +389,7 @@ class Handler(BaseHTTPRequestHandler):
         domain = (form.get("domain") or "").strip().lower().lstrip("@.")
         if not username or len(password) < 10 or not domain:
             return self._redirect("/setup", ("err", "Bitte alle Pflichtfelder korrekt ausfüllen."))
-        run_setup(username, password, domain,
-                  (form.get("cf_email") or "").strip(), (form.get("cf_key") or "").strip())
+        run_setup(username, password, domain)
         return self._redirect("/setup/progress")
 
     def page_setup_progress(self):
@@ -511,7 +499,7 @@ class Handler(BaseHTTPRequestHandler):
                     "<a href='/apps'>zum Katalog</a>.</td></tr>")
 
         body = f"""<h1>Dashboard</h1>
-<p class="sub">{ui.esc(info['hostname'])} · {ui.esc(info['os'])} · Läuft seit {ui.esc(sysinfo.human_uptime(info['uptime']))}</p>
+<p class="sub">Läuft seit {ui.esc(sysinfo.human_uptime(info['uptime']))}</p>
 <div class="grid g4">{cards}</div>
 <h2>Apps</h2>
 <div class="card"><div class="tbl-wrap"><table>
@@ -522,55 +510,56 @@ class Handler(BaseHTTPRequestHandler):
     # Apps: Katalog + Liste
     def page_apps(self):
         installed = store.list_apps()
+        news = connector_news()
+        latest = {g["group"]: g["latest"] for g in catalog.groups()}
         rows = ""
         for app in installed:
             state = dockerctl.status(app["slug"])
-            link = (f"https://{app['domain']}" if app["domain"] else
-                    f"Port {app['host_port']}")
+            link = (f"<a href='https://{ui.esc(app['domain'])}'>{ui.esc(app['domain'])}</a>"
+                    if app["domain"] else f"<span class='mono'>Port {ui.esc(app['host_port'])}</span>")
+            top = latest.get(app["group_id"]) or {}
+            upd = (' <span class="badge">Update</span>'
+                   if top.get("version") and top["version"] != app["version"] else "")
             rows += (f"<tr><td><a href='/apps/{app['id']}'><b>{ui.esc(app['name'])}</b></a></td>"
                      f"<td>{ui.status_pill(state)}</td>"
-                     f"<td class='mono'>{ui.esc(app['version'])}</td>"
-                     f"<td class='mono'>{ui.esc(link)}</td>"
-                     f"<td>{ui.esc(EXPOSURE_LABELS.get(app['exposure'], app['exposure']))}</td>"
+                     f"<td class='mono'>{ui.esc(app['version'])}{upd}</td>"
+                     f"<td>{link}</td>"
                      f"<td><a class='btn sm' href='/apps/{app['id']}/edit'>Einstellungen</a></td></tr>")
         installed_html = (f"<div class='card'><div class='tbl-wrap'><table>"
                           f"<tr><th>Name</th><th>Status</th><th>Version</th><th>Erreichbar</th>"
-                          f"<th>Sichtbarkeit</th><th></th></tr>{rows}</table></div></div>"
+                          f"<th></th></tr>{rows}</table></div></div>"
                           if rows else
-                          "<div class='card muted'>Noch nichts installiert — wähle unten eine App.</div>")
+                          "<div class='card muted'>Noch nichts installiert.</div>")
 
         tiles = ""
         for group in catalog.groups():
-            versions = ", ".join(v["version"] for v in group["versions"][:3])
-            more = "" if len(group["versions"]) <= 3 else " …"
-            version_label = "Version" if len(group["versions"]) == 1 else "Versionen"
+            is_new = any(v["id"] in news for v in group["versions"])
+            tag = ' <span class="badge">neu</span>' if is_new else ""
             tiles += f"""<div class="appcard">
 <div class="row" style="flex-wrap:nowrap"><span class="ico">{ui.esc(group['icon'])}</span>
-<div style="min-width:0"><div class="nm">{ui.esc(group['name'])}</div>
+<div style="min-width:0"><div class="nm">{ui.esc(group['name'])}{tag}</div>
 <div class="help" style="margin:1px 0 0">{ui.esc(group['category'])}</div></div></div>
 <div class="sm">{ui.esc(group['summary'])}</div>
-<div class="help">{version_label}: {ui.esc(versions)}{more}</div>
 <a class="btn primary" href="/apps/catalog/{ui.esc(group['group'])}">Installieren</a></div>"""
         if not tiles:
-            tiles = "<div class='card muted'>Keine Connectors gefunden.</div>"
+            tiles = "<div class='card muted'>Keine Apps gefunden.</div>"
+        count = sum(1 for g in catalog.groups() if any(v["id"] in news for v in g["versions"]))
+        news_tag = f' <span class="badge">{count} neu</span>' if count else ""
 
         body = f"""<h1>Apps</h1>
-<p class="sub">Server-Apps aus dem Katalog installieren und verwalten.</p>
 <h2>Installiert</h2>{installed_html}
-<h2>Katalog</h2>
+<h2>Katalog{news_tag}</h2>
 <div class="apps">{tiles}</div>"""
         self._render("Apps", body, "/apps")
 
     def _domain_field(self, current="", placeholder=""):
-        """Domain-Feld: bei verknüpftem Cloudflare nur vorhandene Zonen
-        (Subdomain + Zone), sonst freies Textfeld."""
+        """Domain: mit DNS-Konto Domain auswählen, Subdomain optional. Sonst Freitext."""
         zones = integrations.all_zones(store.cf_accounts())
         if not zones:
-            info = ui._info_attr("Optional. Ohne verknüpftes DNS-Konto den Eintrag "
-                                 "bitte manuell im DNS setzen.")
             return (f'<div class="field"><label for="domain">Domain</label>'
                     f'<input id="domain" name="domain" value="{ui.esc(current)}" '
-                    f'placeholder="{ui.esc(placeholder)}"{info}></div>')
+                    f'placeholder="{ui.esc(placeholder)}"'
+                    f'{ui._info_attr("Ohne DNS-Konto den Eintrag selbst setzen.")}></div>')
         zone_names = [z["name"] for z in zones]
         sub, sel_zone, matched = "", zone_names[0], False
         for z in sorted(zone_names, key=len, reverse=True):
@@ -580,24 +569,25 @@ class Handler(BaseHTTPRequestHandler):
             if current.endswith("." + z):
                 sub, sel_zone, matched = current[: -(len(z) + 1)], z, True
                 break
-        # Bestehende Domain außerhalb der verknüpften Zonen behalten (nicht überschreiben).
+        # Bestehende Domain außerhalb der verknüpften Zonen behalten.
         extra = ""
         if current and not matched:
             sel_zone = current
             extra = f'<option value="{ui.esc(current)}" selected>{ui.esc(current)}</option>'
         zone_opts = extra + "".join(
-            f'<option value="{ui.esc(z)}"'
-            f'{" selected" if z == sel_zone else ""}>{ui.esc(z)}</option>'
+            f'<option value="{ui.esc(z)}"{" selected" if z == sel_zone else ""}>{ui.esc(z)}</option>'
             for z in zone_names)
-        info = ui._info_attr("Nur Domains deiner verknüpften DNS-Konten. Links optional eine "
-                             "Subdomain, rechts die Zone. Leer lassen = Hauptdomain.")
-        return (f'<div class="field" data-domain-widget><label for="domain_sub">Domain</label>'
-                f'<div class="row" style="gap:8px;align-items:center">'
-                f'<input id="domain_sub" data-domain-sub value="{ui.esc(sub)}" '
-                f'placeholder="app" style="flex:1"{info}>'
-                f'<span class="muted">.</span>'
-                f'<select data-domain-zone aria-label="Zone" style="flex:1">{zone_opts}</select></div>'
-                f'<input type="hidden" name="domain" data-domain-out value="{ui.esc(current)}"></div>')
+        return (f'<div class="field" data-domain-widget>'
+                f'<label for="domain_zone">Domain</label>'
+                f'<select id="domain_zone" data-domain-zone'
+                f'{ui._info_attr("Domains deiner verbundenen DNS-Konten.")}>{zone_opts}</select>'
+                f'<div class="row" style="margin-top:8px">'
+                f'<input class="sub-in" id="domain_sub" data-domain-sub value="{ui.esc(sub)}" '
+                f'placeholder="Subdomain (optional)"'
+                f'{ui._info_attr("Leer = Hauptdomain.")}>'
+                f'<span class="muted mono" data-domain-preview></span></div>'
+                f'<input type="hidden" name="domain" data-domain-out value="{ui.esc(current)}">'
+                f'</div>')
 
     def _exposure_field(self, current):
         opts = ["external", "internal", "specific"]
@@ -656,22 +646,22 @@ class Handler(BaseHTTPRequestHandler):
                 f'<div class="field"><label for="manage_host">Verwaltungs-Adresse</label>'
                 f'<input id="manage_host" name="manage_host" value="{ui.esc(default_mh)}"'
                 f'{ui._info_attr("Eigenes Dashboard + Dateimanager dieser App unter dieser Adresse. Die Seite selbst läuft unter der Domain darüber.")}>'
-                f'<p class="help">Dashboard &amp; Dateien dieser App. Die Domain oben ist die öffentliche Adresse der Seite.</p></div>')
+                f'</div>')
 
         body = f"""<a href="/apps" class="muted">← Katalog</a>
 <h1>{ui.esc(group['icon'])} {ui.esc(group['name'])}</h1>
-<p class="sub">{ui.esc(group['description'] or group['summary'])}</p>
+<p class="sub">{ui.esc(group['summary'])}</p>
 <form method="post" action="/apps/install">
 {ui.csrf_input(self.csrf)}
 <div class="grid g2">
- <div class="card"><h3>1 · Version &amp; Pflichtangaben</h3>
+ <div class="card"><h3>App</h3>
   <div class="field"><label for="connector_id">Version</label>
    <select id="connector_id" name="connector_id"
     onchange="location.href='/apps/catalog/{ui.esc(group_id)}?version='+this.value">{version_options}</select>
 </div>
   {required_html}
  </div>
- <div class="card"><h3>2 · Basis (für alle Apps gleich)</h3>
+ <div class="card"><h3>Basis</h3>
   <div class="field"><label for="name">Name</label>
    <input id="name" name="name" value="{ui.esc(group['name'])}" required></div>
   {self._domain_field('', f"app.{store.get_setting('manage_domain', 'example.com')}")}
@@ -681,20 +671,21 @@ class Handler(BaseHTTPRequestHandler):
    <label for="allow_cidr">Erlaubte IPs/CIDR</label>
    <input id="allow_cidr" name="allow_cidr" placeholder="203.0.113.5/32"></div>
   {self._egress_field('')}
-  <div class="field"><label for="host_port">Port (leer = automatisch)</label>
-   <input id="host_port" name="host_port" type="number" min="1" max="65535"></div>
-  {ui.select_field('location', 'Ablageort', ['docker', 'device'], 'docker', '',
-                   {'docker': 'Docker (Container)', 'device': 'Auf dem Gerät (Host)'})}
-  <div class="field"><label for="data_path">Datenlaufwerk</label>
-   <select id="data_path" name="data_path">{loc_options}</select></div>
-  <div class="field"><label for="network">Netzwerk / Subnetz</label>
-   <select id="network" name="network">{net_options}</select></div>
-  <div class="row"><div class="field" style="flex:1"><label for="cpu">CPU (Kerne)</label>
-   <input id="cpu" name="cpu" type="number" step="0.1" min="0.1" value="1"></div>
-   <div class="field" style="flex:1"><label for="ram_mb">RAM (MB)</label>
-   <input id="ram_mb" name="ram_mb" type="number" min="128" value="1024"></div></div>
  </div>
 </div>
+{ui.section("Erweitert", f'''
+<div class="field"><label for="host_port">Port <span class="muted">leer = automatisch</span></label>
+ <input id="host_port" name="host_port" type="number" min="1" max="65535"></div>
+{ui.select_field('location', 'Ablageort', ['docker', 'device'], 'docker', '',
+                 {'docker': 'Docker (Container)', 'device': 'Auf dem Gerät (Host)'})}
+<div class="field"><label for="data_path">Datenlaufwerk</label>
+ <select id="data_path" name="data_path">{loc_options}</select></div>
+<div class="field"><label for="network">Netzwerk / Subnetz</label>
+ <select id="network" name="network">{net_options}</select></div>
+<div class="row"><div class="field" style="flex:1"><label for="cpu">CPU (Kerne)</label>
+ <input id="cpu" name="cpu" type="number" step="0.1" min="0.1" value="1"></div>
+ <div class="field" style="flex:1"><label for="ram_mb">RAM (MB)</label>
+ <input id="ram_mb" name="ram_mb" type="number" min="128" value="1024"></div></div>''')}
 <div class="row" style="margin-top:16px"><button class="btn primary" type="submit">App installieren</button>
 <a class="btn" href="/apps">Abbrechen</a></div>
 </form>{ui.DEPENDS_JS}"""
@@ -779,19 +770,19 @@ class Handler(BaseHTTPRequestHandler):
 {ui.stat('Speicher', usage.get('mem', '—') or '—', None, 'Limit: ' + str(app['ram_mb']) + ' MB')}
 {ui.stat('Netzwerk', usage.get('net', '—') or '—', None, ui.esc(app['network']))}
 </div>
-<h2>Verbindung</h2>
 <div class="card"><dl class="kv">
 <dt>Erreichbar über</dt><dd class="mono">{ui.esc(url)}</dd>
-<dt>Domain</dt><dd class="mono">{ui.esc(app['domain']) or '—'}</dd>
 {f'<dt>Verwaltung</dt><dd class="mono"><a href="https://{ui.esc(app["manage_host"])}">{ui.esc(app["manage_host"])}</a></dd>' if app.get('manage_host') else ''}
-<dt>Port (extern)</dt><dd class="mono">{ui.esc(app['host_port'])} → intern {ui.esc(app['container_port'])}</dd>
-<dt>Sichtbarkeit</dt><dd>{ui.esc(EXPOSURE_LABELS.get(app['exposure'], app['exposure']))}{(' · ' + ui.esc(app['allow_cidr'])) if app['allow_cidr'] else ''}</dd>
+<dt>Sichtbarkeit</dt><dd>{ui.esc(EXPOSURE_LABELS.get(app['exposure'], app['exposure']))}</dd>
+</dl></div>
+{secrets_html}
+<div class="card" style="margin-top:13px">{actions}</div>
+{ui.section("Details", f'''<dl class="kv">
+<dt>Port</dt><dd class="mono">{ui.esc(app['host_port'])} → {ui.esc(app['container_port'])}</dd>
 <dt>Ablageort</dt><dd>{ui.esc(LOCATION_LABELS.get(app['location'], app['location']))}</dd>
 <dt>Datenpfad</dt><dd class="mono">{ui.esc(appsvc.host_data_path(app, app['data_path']))}</dd>
 <dt>Container</dt><dd class="mono">{ui.esc(dockerctl.container_name(app['slug']))}</dd>
-</dl></div>
-{secrets_html}
-<h2>Aktionen</h2><div class="card">{actions}</div>"""
+</dl>''')}"""
         self._render(app["name"], body, "/apps")
 
     def page_app_logs(self, app_id):
@@ -846,11 +837,8 @@ class Handler(BaseHTTPRequestHandler):
                 networks.append(app["network"])
             content = f"""<form method="post" action="/apps/{app['id']}/edit?section=basic">
 {ui.csrf_input(self.csrf)}<input type="hidden" name="section" value="basic">
-<div class="card"><h3>Basis-Einstellungen</h3>
-<p class="help" style="margin-bottom:14px">Änderungen erstellen den Container neu; die Daten
-bleiben erhalten. Rot umrandete Felder ändern den Aufbau grundlegend — erst freischalten.</p>
-<div class="grid g2">
-<div>{ui.readonly_field('Version', app['version'], 'nur bei Installation wählbar')}
+<div class="card">
+{ui.readonly_field('Version', app['version'], 'nur bei Installation wählbar')}
 <div class="field"><label for="name">Name</label>
  <input id="name" name="name" value="{ui.esc(app['name'])}" required></div>
 {self._domain_field(app['domain'])}
@@ -863,23 +851,23 @@ bleiben erhalten. Rot umrandete Felder ändern den Aufbau grundlegend — erst f
  <label for="allow_cidr">Erlaubte IPs/CIDR</label>
  <input id="allow_cidr" name="allow_cidr" value="{ui.esc(app['allow_cidr'])}"></div>
 {self._egress_field(app.get('egress_id',''))}
-<div class="field"><label for="host_port">Port (extern)</label>
+<button class="btn primary" type="submit">Speichern</button></div>
+{ui.section("Erweitert", f'''<p class="help" style="margin:0 0 12px">Rot = erst freischalten.</p>
+<div class="field"><label for="host_port">Port</label>
  <input id="host_port" name="host_port" type="number" value="{ui.esc(app['host_port'])}"></div>
-</div>
-<div>{ui.select_field('location', 'Ablageort', ['docker', 'device'], app['location'],
-                      'Wechsel setzt die App neu auf.',
-                      {'docker': 'Docker (Container)', 'device': 'Auf dem Gerät (Host)'}, locked=True)}
+{ui.select_field('location', 'Ablageort', ['docker', 'device'], app['location'],
+                 'Wechsel setzt die App neu auf.',
+                 {'docker': 'Docker (Container)', 'device': 'Auf dem Gerät (Host)'}, locked=True)}
 {ui.select_field('data_path', 'Datenlaufwerk', loc_paths, app['data_path'],
-                 'Ein anderes Laufwerk setzt die App mit leeren Daten neu auf.', loc_labels, locked=True)}
-{ui.select_field('network', 'Netzwerk / Subnetz', networks, app['network'],
-                 'Wechsel des Subnetzes erstellt den Container neu.',
+                 'Anderes Laufwerk = App wird mit leeren Daten neu aufgesetzt.',
+                 loc_labels, locked=True)}
+{ui.select_field('network', 'Netzwerk / Subnetz', networks, app['network'], '',
                  {n: n for n in networks})}
-<div class="field"><label for="cpu">CPU (Kerne)</label>
+<div class="row"><div class="field" style="flex:1"><label for="cpu">CPU (Kerne)</label>
  <input id="cpu" name="cpu" type="number" step="0.1" min="0.1" value="{ui.esc(app['cpu'])}"></div>
-<div class="field"><label for="ram_mb">RAM (MB)</label>
- <input id="ram_mb" name="ram_mb" type="number" min="128" value="{ui.esc(app['ram_mb'])}"></div>
-</div></div>
-<button class="btn primary" type="submit">Speichern &amp; neu erstellen</button></div></form>"""
+<div class="field" style="flex:1"><label for="ram_mb">RAM (MB)</label>
+ <input id="ram_mb" name="ram_mb" type="number" min="128" value="{ui.esc(app['ram_mb'])}"></div></div>''')}
+</form>"""
 
         body = (f'<a href="/apps/{app["id"]}" class="muted">← {ui.esc(app["name"])}</a>'
                 f'<h1>Einstellungen</h1><p class="sub">{ui.esc(app["name"])} · '
@@ -1027,33 +1015,32 @@ bleiben erhalten. Rot umrandete Felder ändern den Aufbau grundlegend — erst f
         client_id = store.get_setting("cf_client_id", "")
         redirect_uri = (f"https://{domain}/network/cloudflare/callback" if domain
                         else "https://<deine-domain>/network/cloudflare/callback")
-        inner = f"""<div class="grid g2">
-<div>
-<h3>1 · Mit Cloudflare anmelden</h3>
-<p class="help" style="margin-bottom:10px">Voraussetzung: ein OAuth-Client im Cloudflare-Konto
-(Konto verwalten → OAuth clients → Create client) mit dieser Rückleitung:</p>
-<p class="help mono" style="word-break:break-all;margin-bottom:10px">{ui.esc(redirect_uri)}</p>
+        other = f"""<form method="post" action="/network">{ui.csrf_input(self.csrf)}
+<input type="hidden" name="action" value="cf_link">
+<div class="field"><label for="cf_email">Konto-E-Mail</label>
+ <input id="cf_email" name="cf_email" type="email" required autocomplete="off"></div>
+<div class="field"><label for="cf_key">Global API Key</label>
+ <input id="cf_key" name="cf_key" type="password" required autocomplete="off">
+ <p class="help">Wird nicht gespeichert — weblab erzeugt daraus einen Token nur für DNS.</p></div>
+<button class="btn" type="submit">Verbinden</button></form>
+<hr style="border:0;border-top:1px solid var(--line);margin:16px 0">
 <form method="post" action="/network">{ui.csrf_input(self.csrf)}
 <input type="hidden" name="action" value="cf_oauth">
-<div class="field"><label for="cf_client_id">Client-ID</label>
- <input id="cf_client_id" name="cf_client_id" value="{ui.esc(client_id)}"
-  placeholder="00000000-0000-0000-0000-000000000000" required></div>
-<div class="field"><label for="cf_client_secret">Client-Secret <span class="muted">(falls vergeben)</span></label>
+<div class="field"><label for="cf_client_id">OAuth-Client-ID</label>
+ <input id="cf_client_id" name="cf_client_id" value="{ui.esc(client_id)}" required>
+ <p class="help">Rückleitung: <span class="mono">{ui.esc(redirect_uri)}</span></p></div>
+<div class="field"><label for="cf_client_secret">Client-Secret <span class="muted">optional</span></label>
  <input id="cf_client_secret" name="cf_client_secret" type="password" autocomplete="off"></div>
-<button class="btn primary" type="submit">Mit Cloudflare anmelden</button></form></div>
-<div>
-<h3>2 · Konto-Anmeldung <span class="pill">ohne Vorbereitung</span></h3>
-<p class="help" style="margin-bottom:10px">Einmalige Anmeldung mit E-Mail und Konto-Schlüssel.
-Daraus entsteht ein Token nur für DNS, gültig ein Jahr. Der Schlüssel wird nicht gespeichert.</p>
-<form method="post" action="/network">{ui.csrf_input(self.csrf)}
-<input type="hidden" name="action" value="cf_link">
-<div class="field"><label for="cf_email">E-Mail des Kontos</label>
- <input id="cf_email" name="cf_email" type="email" required autocomplete="off"></div>
-<div class="field"><label for="cf_key">Konto-Schlüssel (Global API Key)</label>
- <input id="cf_key" name="cf_key" type="password" required autocomplete="off">
- <p class="help">Cloudflare → Mein Profil → API-Tokens → Global API Key → View.</p></div>
-<button class="btn" type="submit">Konto verbinden</button></form></div>
-</div>"""
+<button class="btn" type="submit">Mit Cloudflare anmelden</button></form>"""
+        inner = f"""<form method="post" action="/network">{ui.csrf_input(self.csrf)}
+<input type="hidden" name="action" value="cf_token">
+<div class="field"><label for="cf_api_token">API-Token</label>
+ <input id="cf_api_token" name="cf_api_token" type="password" required autocomplete="off"
+  placeholder="Token einfügen">
+ <p class="help">Cloudflare → Profil → API-Tokens → Vorlage „Zone-DNS bearbeiten“,
+ alle Zonen auswählen.</p></div>
+<button class="btn primary" type="submit">Verbinden</button></form>
+{ui.section("Andere Wege", other)}"""
         return ui.modal("cfDialog", "DNS-Konto verbinden", inner)
 
     def _vpn_block(self):
@@ -1145,104 +1132,81 @@ ProtonVPN. Privaten Schlüssel und Adresse aus der heruntergeladenen WireGuard-K
                 + "<p class='help'>Einträge je App (A, MX, SPF …) werden automatisch angelegt.</p>")
 
     def page_network(self):
-        adv = self._query().get("advanced") == "1"
         app_by_port = {a["host_port"]: a for a in store.list_apps()}
         ports = sysinfo.listening_ports()
 
-        def port_row(row):
-            app = app_by_port.get(row["port"])
-            owner = (f"<a href='/apps/{app['id']}'>{ui.esc(app['name'])}</a>" if app
-                     else ui.esc(row["process"] or "—"))
-            return (f"<tr><td class='mono'>{row['port']}</td><td>{ui.esc(row['proto'])}</td>"
-                    f"<td class='mono'>{ui.esc(row['address'])}</td><td>{owner}</td></tr>")
+        def port_rows(rows):
+            out = ""
+            for row in rows:
+                app = app_by_port.get(row["port"])
+                owner = (f"<a href='/apps/{app['id']}'>{ui.esc(app['name'])}</a>" if app
+                         else ui.esc(row["process"] or "—"))
+                out += (f"<tr><td class='mono'>{row['port']}</td><td>{ui.esc(row['proto'])}</td>"
+                        f"<td>{owner}</td></tr>")
+            return out or "<tr><td colspan='3' class='muted'>Keine.</td></tr>"
 
-        ext_ports = [r for r in ports if r["scope"] == "extern"]
-        int_ports = [r for r in ports if r["scope"] != "extern"]
-        ext_rows = ("".join(port_row(r) for r in ext_ports)
-                    or "<tr><td colspan='4' class='muted'>Keine nach außen offenen Ports.</td></tr>")
+        def table(head, rows):
+            return (f"<div class='tbl-wrap'><table><tr>"
+                    + "".join(f"<th>{h}</th>" for h in head) + f"</tr>{rows}</table></div>")
 
-        # externe Adressen (ohne loopback / link-local)
-        ext_addr = []
+        ext = table(["Port", "Protokoll", "Dienst"],
+                    port_rows([r for r in ports if r["scope"] == "extern"]))
+        internal = table(["Port", "Protokoll", "Dienst"],
+                         port_rows([r for r in ports if r["scope"] != "extern"]))
+
+        iface_rows = ""
         for iface in sysinfo.interfaces():
-            for a in iface["addresses"]:
-                if not str(a["address"]).startswith(("127.", "::1", "fe80")):
-                    ext_addr.append((iface["name"], f"{a['address']}/{a['prefix']}"))
-        addr_rows = ("".join(f"<tr><td class='mono'>{ui.esc(n)}</td>"
-                             f"<td class='mono'>{ui.esc(a)}</td></tr>" for n, a in ext_addr)
-                     or "<tr><td colspan='2' class='muted'>Keine externe Adresse.</td></tr>")
+            addresses = ", ".join(f"{a['address']}/{a['prefix']}"
+                                  for a in iface["addresses"]) or "—"
+            iface_rows += (f"<tr><td class='mono'><b>{ui.esc(iface['name'])}</b></td>"
+                           f"<td>{ui.esc(iface['state'])}</td>"
+                           f"<td class='mono'>{ui.esc(addresses)}</td></tr>")
+        iface_html = table(["Schnittstelle", "Status", "Adressen"],
+                           iface_rows or "<tr><td colspan='3' class='muted'>—</td></tr>")
 
-        toggle = (f'<a class="btn sm" href="/network">Weniger anzeigen</a>' if adv
-                  else f'<a class="btn sm" href="/network?advanced=1">Erweitert: intern &amp; Subnetze</a>')
-
-        advanced_html = ""
-        if adv:
-            int_rows = ("".join(port_row(r) for r in int_ports)
-                        or "<tr><td colspan='4' class='muted'>Keine internen Ports.</td></tr>")
-            iface_rows = ""
-            for iface in sysinfo.interfaces():
-                addresses = ", ".join(f"{a['address']}/{a['prefix']}"
-                                      for a in iface["addresses"]) or "—"
-                iface_rows += (f"<tr><td class='mono'><b>{ui.esc(iface['name'])}</b></td>"
-                               f"<td>{ui.esc(iface['state'])}</td>"
-                               f"<td class='mono'>{ui.esc(addresses)}</td>"
-                               f"<td class='mono'>{ui.esc(iface['mac'])}</td></tr>")
-            iface_rows = iface_rows or "<tr><td colspan='4' class='muted'>Keine Daten.</td></tr>"
-
-            net_rows = ""
-            if dockerctl.available():
-                app_networks = {}
-                for app in store.list_apps():
-                    app_networks.setdefault(app["network"], []).append(app["name"])
-                for net in dockerctl.networks():
-                    details = dockerctl.network_details(net["Name"])
-                    configs = (details.get("IPAM") or {}).get("Config") or []
-                    subnet = ", ".join(c.get("Subnet", "") for c in configs) or "—"
-                    used_by = ", ".join(app_networks.get(net["Name"], [])) or "—"
-                    builtin = net["Name"] in ("bridge", "host", "none")
-                    del_btn = "" if builtin else f"""<form method="post" action="/network" style="display:inline">
-{ui.csrf_input(self.csrf)}<input type="hidden" name="action" value="delete_network">
-<input type="hidden" name="name" value="{ui.esc(net['Name'])}">
-<button class="btn sm danger" type="submit"
- onclick="return confirm('Subnetz {ui.esc(net['Name'])} löschen?')">Löschen</button></form>"""
-                    net_rows += (f"<tr><td class='mono'><b>{ui.esc(net['Name'])}</b></td>"
-                                 f"<td class='mono'>{ui.esc(subnet)}</td>"
-                                 f"<td>{ui.esc(net.get('Driver', ''))}</td>"
-                                 f"<td>{ui.esc(used_by)}</td><td>{del_btn}</td></tr>")
-            net_rows = net_rows or "<tr><td colspan='5' class='muted'>Docker nicht verfügbar.</td></tr>"
-
-            advanced_html = f"""
-<h2>Interne Ports</h2>
-<div class="card"><div class="tbl-wrap"><table>
-<tr><th>Port</th><th>Protokoll</th><th>Adresse</th><th>Dienst</th></tr>{int_rows}</table></div></div>
-<h2>Schnittstellen</h2>
-<div class="card"><div class="tbl-wrap"><table>
-<tr><th>Name</th><th>Status</th><th>Adressen</th><th>MAC</th></tr>{iface_rows}</table></div></div>
-<h2>Subnetze (Docker-Netzwerke)</h2>
-<div class="card"><div class="tbl-wrap"><table>
-<tr><th>Name</th><th>Subnetz</th><th>Treiber</th><th>Genutzt von</th><th></th></tr>{net_rows}</table></div>
-<h3 style="margin-top:18px">Neues Subnetz</h3>
-<form method="post" action="/network" class="row">{ui.csrf_input(self.csrf)}
-<input type="hidden" name="action" value="create_network">
-<input name="name" placeholder="z. B. spiele" required style="flex:1;min-width:160px">
-<input name="subnet" placeholder="10.80.0.0/24" style="flex:1;min-width:160px">
+        net_rows = ""
+        if dockerctl.available():
+            app_networks = {}
+            for app in store.list_apps():
+                app_networks.setdefault(app["network"], []).append(app["name"])
+            for net in dockerctl.networks():
+                details = dockerctl.network_details(net["Name"])
+                configs = (details.get("IPAM") or {}).get("Config") or []
+                subnet = ", ".join(c.get("Subnet", "") for c in configs) or "—"
+                used_by = ", ".join(app_networks.get(net["Name"], [])) or "—"
+                del_btn = "" if net["Name"] in ("bridge", "host", "none") else (
+                    f'<form method="post" action="/network" style="display:inline">'
+                    f'{ui.csrf_input(self.csrf)}'
+                    f'<input type="hidden" name="action" value="delete_network">'
+                    f'<input type="hidden" name="name" value="{ui.esc(net["Name"])}">'
+                    f'<button class="btn sm danger" type="submit">Löschen</button></form>')
+                net_rows += (f"<tr><td class='mono'><b>{ui.esc(net['Name'])}</b></td>"
+                             f"<td class='mono'>{ui.esc(subnet)}</td>"
+                             f"<td>{ui.esc(used_by)}</td><td>{del_btn}</td></tr>")
+        subnet_html = table(["Subnetz", "Bereich", "Genutzt von", ""],
+                            net_rows or "<tr><td colspan='4' class='muted'>—</td></tr>")
+        subnet_html += f"""<form method="post" action="/network" class="row" style="margin-top:14px">
+{ui.csrf_input(self.csrf)}<input type="hidden" name="action" value="create_network">
+<input name="name" placeholder="Name" required style="flex:1;min-width:140px">
+<input name="subnet" placeholder="10.80.0.0/24" style="flex:1;min-width:140px">
 <label class="check"><input type="checkbox" name="internal" value="1">
-<span class="help" style="margin:0">isoliert (kein Internet)</span></label>
-<button class="btn primary" type="submit">Anlegen</button></form></div>"""
+<span class="help" style="margin:0">ohne Internet</span></label>
+<button class="btn" type="submit">Anlegen</button></form>"""
 
         body = f"""<h1>Netzwerk</h1>
-<p class="sub">DNS-Konto, offene Ports und Verbindungen.</p>
+<div class="card"><form method="post" action="/network" class="row">{ui.csrf_input(self.csrf)}
+<input type="hidden" name="action" value="general">
+<div class="field" style="flex:1;min-width:190px;margin:0"><label for="manage_domain">Domain</label>
+ <input id="manage_domain" name="manage_domain" value="{ui.esc(store.get_setting('manage_domain',''))}"></div>
+<div class="field" style="flex:1;min-width:160px;margin:0"><label for="server_ip">Server-IP</label>
+ <input id="server_ip" name="server_ip" value="{ui.esc(store.get_setting('server_ip',''))}"></div>
+<button class="btn" type="submit" style="margin-top:22px">Speichern</button></form></div>
 <h2>DNS</h2>
-<div class="card">{self._cloudflare_block()}{self._dns_records_html()}</div>
-<h2 style="margin-top:30px">VPN</h2>
-<div class="card">{self._vpn_block()}</div>
-<div class="between" style="margin:30px 0 11px">
-<h2 style="margin:0">Offene Ports (extern)</h2>{toggle}</div>
-<div class="card"><div class="tbl-wrap"><table>
-<tr><th>Port</th><th>Protokoll</th><th>Adresse</th><th>Dienst</th></tr>{ext_rows}</table></div></div>
-<h2>Externe Adressen</h2>
-<div class="card"><div class="tbl-wrap"><table>
-<tr><th>Schnittstelle</th><th>Adresse</th></tr>{addr_rows}</table></div></div>
-{advanced_html}"""
+<div class="card">{self._cloudflare_block()}</div>
+{ui.section("DNS-Einträge", self._dns_records_html() or "<p class='muted'>Kein Konto verbunden.</p>")}
+{ui.section("VPN", self._vpn_block())}
+{ui.section("Offene Ports", ext + ui.section("Intern", internal))}
+{ui.section("Erweitert", iface_html + ui.section("Subnetze", subnet_html))}"""
         self._render("Netzwerk", body, "/network")
 
     def do_network(self, form):
@@ -1252,10 +1216,10 @@ ProtonVPN. Privaten Schlüssel und Adresse aus der heruntergeladenen WireGuard-K
                 dockerctl.create_network(form.get("name", "").strip(),
                                          form.get("subnet", "").strip() or None,
                                          internal=form.get("internal") == "1")
-                return self._redirect("/network?advanced=1", ("ok", "Subnetz angelegt."))
+                return self._redirect("/network", ("ok", "Subnetz angelegt."))
             if action == "delete_network":
                 dockerctl.remove_network(form.get("name", ""))
-                return self._redirect("/network?advanced=1", ("ok", "Subnetz gelöscht."))
+                return self._redirect("/network", ("ok", "Subnetz gelöscht."))
             if action == "dns_delete":
                 zone = form.get("zone", "") or store.get_setting("manage_domain", "")
                 token = integrations.token_for_host(store.cf_accounts(), zone)
@@ -1266,6 +1230,22 @@ ProtonVPN. Privaten Schlüssel und Adresse aus der heruntergeladenen WireGuard-K
                                       else ("err", err or "Fehler"))
             if action == "cf_oauth":
                 return self._cf_oauth_start(form)
+            if action == "general":
+                store.set_setting("manage_domain",
+                                  (form.get("manage_domain") or "").strip().lower().lstrip("@."))
+                store.set_setting("server_ip",
+                                  (form.get("server_ip") or "").strip() or sysinfo.public_ip())
+                ok, err = appsvc.sync_proxy()
+                return self._redirect("/network", ("ok", "Gespeichert.") if ok
+                                      else ("err", f"Proxy: {err}"))
+            if action == "cf_token":
+                token = (form.get("cf_api_token") or "").strip()
+                ok, info = integrations.Cloudflare(token).verify() if token else (False, "leer")
+                if not ok:
+                    return self._redirect("/network", ("err", f"Token ungültig: {info}"))
+                store.add_cf_account("API-Token", token)
+                store.set_setting("cf_status", "verknüpft")
+                return self._redirect("/network", ("ok", "DNS-Konto verbunden."))
             if action == "cf_link":
                 email = form.get("cf_email", "").strip()
                 token, err = integrations.link_account(
@@ -1375,7 +1355,7 @@ ProtonVPN. Privaten Schlüssel und Adresse aus der heruntergeladenen WireGuard-K
         disk_cards = disk_cards or "<div class='card muted'>Keine Laufwerke erkannt.</div>"
 
         body = f"""<h1>Speicher</h1>
-<p class="sub">Laufwerke des Servers und was die Apps darauf belegen.</p>
+
 <div class="grid g4">{summary}</div>
 <h2>Laufwerke</h2>{disk_cards}"""
         self._render("Speicher", body, "/storage")
@@ -1397,7 +1377,7 @@ ProtonVPN. Privaten Schlüssel und Adresse aus der heruntergeladenen WireGuard-K
                      f"<td>{delete_btn}</td></tr>")
 
         body = f"""<h1>Benutzer</h1>
-<p class="sub">Konten für die Verwaltungsoberfläche.</p>
+
 <div class="card"><div class="tbl-wrap"><table>
 <tr><th>Benutzer</th><th>Rolle</th><th>Angelegt</th><th></th></tr>{rows}</table></div></div>
 <div class="grid g2" style="margin-top:14px">
@@ -1442,97 +1422,6 @@ ProtonVPN. Privaten Schlüssel und Adresse aus der heruntergeladenen WireGuard-K
         except Exception as exc:  # noqa: BLE001
             return self._redirect("/users", ("err", str(exc)))
         return self._redirect("/users")
-
-    def page_settings(self):
-        domain = store.get_setting("manage_domain", "")
-        server_ip = store.get_setting("server_ip", "")
-        connectors = catalog.load_all()
-        au_on = autoupdate_enabled()
-
-        body = f"""<h1>Einstellungen</h1>
-<p class="sub">Domain, Server und Katalog. DNS-Konto unter Netzwerk.</p>
-<div class="grid g2">
-<div class="card"><h3>Server &amp; Domain</h3>
-<form method="post" action="/settings">{ui.csrf_input(self.csrf)}
-<input type="hidden" name="action" value="general">
-<div class="field"><label for="domain">Verwaltungs-Domain</label>
- <input id="domain" name="manage_domain" value="{ui.esc(domain)}">
- <p class="help">Der A-Record (@) muss auf {ui.esc(server_ip) or 'diesen Server'} zeigen.</p></div>
-<div class="field"><label for="server_ip">Server-IP</label>
- <input id="server_ip" name="server_ip" value="{ui.esc(server_ip)}">
- <p class="help">Leer speichern ermittelt die IP neu.</p></div>
-<button class="btn primary" type="submit">Speichern &amp; Proxy neu laden</button></form></div>
-<div class="card"><h3>Katalog</h3>
-<p class="help" style="margin-bottom:12px">{len(connectors)} Connector-Dateien ·
-{len(catalog.groups())} Apps im Katalog.</p>
-<div class="tbl-wrap"><table><tr><th>App</th><th>Version</th><th>Connector</th></tr>
-{''.join(f"<tr><td>{ui.esc(c['name'])}</td><td class='mono'>{ui.esc(c['version'])}</td><td class='mono'>{ui.esc(c['id'])}</td></tr>" for c in connectors)}
-</table></div>
-<form method="post" action="/settings" style="margin-top:14px">{ui.csrf_input(self.csrf)}
-<input type="hidden" name="action" value="reload_catalog">
-<button class="btn" type="submit">Katalog neu einlesen</button></form>
-<p class="help">Connector-Dateien liegen unter <code>{ui.esc(catalog.CONNECTOR_DIR)}</code>.</p></div>
-</div>
-<h2>Aktualisierung</h2>
-<div class="card">
-<dl class="kv">
-<dt>Version</dt><dd class="mono">{ui.esc(weblab_version())}</dd>
-<dt>Automatische Updates</dt><dd>{'ein' if au_on else 'aus'}</dd>
-<dt>Letzte Prüfung</dt><dd class="mono">{ui.esc(last_update_check()) or '—'}</dd>
-</dl>
-<p class="help" style="margin:6px 0 12px">Prüft regelmäßig das öffentliche Repo und
-installiert neue Versionen automatisch.</p>
-<div class="row">
-<form method="post" action="/settings">{ui.csrf_input(self.csrf)}
-<input type="hidden" name="action" value="update_now">
-<button class="btn primary" type="submit">Jetzt prüfen &amp; aktualisieren</button></form>
-<form method="post" action="/settings">{ui.csrf_input(self.csrf)}
-<input type="hidden" name="action" value="autoupdate">
-<input type="hidden" name="enabled" value="{'0' if au_on else '1'}">
-<button class="btn" type="submit">{'Automatische Updates ausschalten' if au_on else 'Automatische Updates einschalten'}</button></form>
-</div></div>
-<h2>Status</h2>
-<div class="card"><dl class="kv">
-<dt>Docker</dt><dd>{'aktiv' if dockerctl.available() else 'nicht verfügbar'}</dd>
-<dt>Caddy</dt><dd>{'aktiv' if sysinfo.service_active('caddy') else 'nicht aktiv'}</dd>
-<dt>DNS-Status</dt><dd>{ui.esc(store.get_setting('dns_status', '—'))}</dd>
-</dl></div>"""
-        self._render("Einstellungen", body, "/settings")
-
-    def do_settings(self, form):
-        action = form.get("action")
-        if action == "reload_catalog":
-            catalog.load_all(force=True)
-            return self._redirect("/settings", ("ok", "Katalog neu eingelesen."))
-        if action == "update_now":
-            _systemctl("start", UPDATE_TIMER.replace(".timer", ".service"), no_block=True)
-            return self._redirect("/settings",
-                                  ("ok", "Update gestartet — läuft im Hintergrund."))
-        if action == "autoupdate":
-            enable = form.get("enabled") == "1"
-            if enable:
-                try:
-                    os.remove(AUTOUPDATE_OFF)
-                except OSError:
-                    pass
-                _systemctl("enable", "--now", UPDATE_TIMER)
-                return self._redirect("/settings", ("ok", "Automatische Updates eingeschaltet."))
-            _systemctl("disable", "--now", UPDATE_TIMER)
-            try:
-                open(AUTOUPDATE_OFF, "w").close()
-            except OSError:
-                pass
-            return self._redirect("/settings", ("ok", "Automatische Updates ausgeschaltet."))
-        if action == "general":
-            domain = (form.get("manage_domain") or "").strip().lower().lstrip("@.")
-            store.set_setting("manage_domain", domain)
-            server_ip = (form.get("server_ip") or "").strip() or sysinfo.public_ip()
-            store.set_setting("server_ip", server_ip)
-            ok, err = appsvc.sync_proxy()
-            return self._redirect("/settings", ("ok", "Gespeichert.") if ok
-                                  else ("err", f"Proxy-Fehler: {err}"))
-        return self._redirect("/settings")
-
 
     # Cloudflare-Anmeldung (OAuth-Rückleitung)
     def cf_callback(self):

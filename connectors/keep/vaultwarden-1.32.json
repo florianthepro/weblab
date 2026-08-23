@@ -5,8 +5,8 @@
   "version": "1.32",
   "category": "Werkzeuge",
   "icon": "🔐",
-  "summary": "Passwort-Manager (Bitwarden-kompatibel), self-hosted.",
-  "description": "Leichter, mit Bitwarden-Apps kompatibler Passwort-Manager. Nur über HTTPS betreiben. Nach der Registrierung des ersten Kontos die Registrierung ausschalten.",
+  "summary": "Passwort-Manager",
+  "description": "",
   "runtime": "docker",
   "image": "vaultwarden/server:1.32.0",
   "container_port": 80,
@@ -19,7 +19,7 @@
   },
   "env": {},
   "notes": [
-    "Nur über HTTPS betreiben (eigene Domain). Nach dem ersten Konto „Registrierung erlauben“ ausschalten."
+    "Nach dem ersten Konto Registrierung ausschalten."
   ],
   "fields": {
     "required": [],

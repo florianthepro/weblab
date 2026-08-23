@@ -11,9 +11,8 @@ git clone https://github.com/florianthepro/weblab && sudo bash weblab/software/r
 ```
 
 Danach **`http://<server-ip>`** öffnen: Der Assistent fragt **Admin + Passwort +
-Verwaltungs-Domain** (deren `@`-Record auf diese IP zeigt), richtet optional per
-Cloudflare-Token das DNS ein und zeigt einen Ladebalken. Anschließend läuft die Oberfläche
-unter **`https://deine-domain`**.
+Verwaltungs-Domain** (deren `@`-Record auf diese IP zeigt). Anschließend läuft die Oberfläche
+unter **`https://deine-domain`**; das DNS-Konto verbindest du danach unter *Netzwerk*.
 
 ### Von Grund auf neu (Server bereinigen)
 
@@ -36,15 +35,17 @@ Es zeigt an, was gefunden wurde, und fragt einmal nach (`JA`). Für einen Lauf o
 |---|---|
 | **Dashboard** | Auslastung des Servers (CPU/RAM/Platte) + Verbrauch je App |
 | **Apps** | Katalog (installieren) und installierte Apps (verwalten) |
-| **Netzwerk** | DNS-Konto + Einträge, VPN (Tailscale + Mullvad/Proton), offene Ports |
+| **Netzwerk** | Domain & Server-IP, DNS-Konto + Einträge, VPN, offene Ports |
 | **Speicher** | Laufwerke (physisch) mit Belegung je Disk und welche App wie viel belegt |
 | **Benutzer** | Konten für die Oberfläche |
-| **Einstellungen** | Domain, Server-IP, Katalog, automatische Updates |
 
-## Automatische Updates
-weblab prüft regelmäßig das Repo und installiert neue Versionen selbst (systemd-Timer).
-Unter **Einstellungen** siehst du die Version, kannst manuell „Jetzt prüfen & aktualisieren"
-und die automatischen Updates ein-/ausschalten.
+Tiefere Angaben stecken in aufklappbaren Bereichen; Fehler erscheinen als Banner, das auf
+jeder Seite bleibt, bis man es schließt.
+
+## Updates
+weblab hält sich im Hintergrund selbst aktuell (systemd-Timer). Sichtbar ist davon nur,
+was zählt: neue Apps im Katalog sind mit **neu** markiert, und bei installierten Apps
+erscheint **Update**, wenn es eine neuere Version gibt.
 
 ## VPN je App
 Unter **Netzwerk → VPN**:
@@ -77,21 +78,18 @@ Unter **App → Einstellungen** gibt es drei Bereiche:
 - **Erweitert** — z. B. **Plugins**: Quelle wählen, suchen, hinzufügen, Liste mit Löschen
 
 ### Enthaltene Apps
-Minecraft (Java), Webseite (Apache + PHP), Webseite (Nginx), Mailserver, PostgreSQL.
+Webseite (Apache), Webseite (Nginx), Nextcloud, Jellyfin, Mailserver, Minecraft (Java),
+PostgreSQL, MariaDB, Redis, Adminer, Gitea, Vaultwarden, Uptime Kuma, FreshRSS,
+code-server, IT-Tools.
 
-## Cloudflare verknüpfen
-Unter **Netzwerk → DNS** verknüpfst du dein Konto — **du musst keinen Token
-selbst anlegen**. Zwei Wege:
+## DNS-Konto verbinden
+Unter **Netzwerk → DNS-Konto verbinden** (Overlay). Am einfachsten mit einem **API-Token**
+(Cloudflare → Profil → API-Tokens → Vorlage „Zone-DNS bearbeiten"). Unter *Andere Wege* gibt
+es zusätzlich die Konto-Anmeldung (E-Mail + Global API Key, wird nicht gespeichert) und
+die Anmeldung per OAuth.
 
-1. **Mit Cloudflare anmelden** — du wirst zu Cloudflare geleitet und bestätigst dort den
-   Zugriff (OAuth, Authorization Code + PKCE). Dafür legst du einmalig einen OAuth-Client in
-   deinem Cloudflare-Konto an; die nötige Rückleitungs-Adresse zeigt weblab an.
-2. **Konto-Anmeldung** (ohne Vorbereitung) — einmalige Eingabe von Konto-E-Mail und
-   Konto-Schlüssel. weblab erzeugt daraus selbst einen Token, der **nur DNS** ändern darf und
-   nach einem Jahr abläuft; der Schlüssel wird **nicht gespeichert**.
-
-Danach legt weblab die DNS-Einträge jeder App automatisch an (Webseiten: A-Record;
-Mailserver: A, MX, SPF, DMARC).
+Danach wählst du bei jeder App die **Domain aus einer Liste** und optional eine Subdomain;
+die DNS-Einträge legt weblab selbst an (Webseiten: A-Record; Mailserver: A, MX, SPF, DMARC).
 
 Details zum Connector-Format: [`connectors/README.md`](connectors/README.md).
 

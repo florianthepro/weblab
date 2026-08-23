@@ -5,8 +5,8 @@
   "version": "1.22",
   "category": "Werkzeuge",
   "icon": "🍵",
-  "summary": "Leichtgewichtiges Git-Hosting (Repos, Issues, PRs).",
-  "description": "Self-hosted Git-Dienst mit Weboberfläche. Beim ersten Aufruf führt Gitea durch die Erstkonfiguration und das Admin-Konto.",
+  "summary": "Git-Hosting",
+  "description": "",
   "runtime": "docker",
   "image": "gitea/gitea:1.22",
   "container_port": 3000,
@@ -23,7 +23,7 @@
     "GITEA__server__DISABLE_SSH": "true"
   },
   "notes": [
-    "SSH-Zugriff ist deaktiviert; Klonen/Pushen über HTTPS."
+    "Kein SSH — klonen über HTTPS."
   ],
   "fields": {
     "required": [],

@@ -5,8 +5,8 @@
   "version": "30",
   "category": "Cloud",
   "icon": "☁️",
-  "summary": "Eigene Cloud: Dateien, Kalender, Kontakte, Fotos.",
-  "description": "Self-hosted Cloud-Speicher mit Dateien, Kalender, Kontakten und Apps. Nutzt SQLite (für kleine Installationen) — für größere eine separate Datenbank anbinden.",
+  "summary": "Cloud-Speicher, Kalender, Kontakte",
+  "description": "",
   "runtime": "docker",
   "image": "nextcloud:30-apache",
   "container_port": 80,
@@ -23,7 +23,7 @@
     "APACHE_DISABLE_REWRITE_IP": "1"
   },
   "notes": [
-    "Erste Anmeldung mit dem hier gesetzten Admin-Konto. Als „Erreichbar über“-Domain und Trusted-Domain dieselbe Adresse verwenden."
+    "Domain hier und im Feld „Domain“ gleich halten."
   ],
   "fields": {
     "required": [

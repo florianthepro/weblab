@@ -321,7 +321,7 @@ def link_account(email, global_key, label="weblab"):
 
 
 # OAuth (Authorization Code + PKCE). Rückleitung:
-# https://<verwaltungs-domain>/settings/cloudflare/callback
+# https://<verwaltungs-domain>/network/cloudflare/callback
 CF_AUTHORIZE = "https://dash.cloudflare.com/oauth2/auth"
 CF_TOKEN_URL = "https://dash.cloudflare.com/oauth2/token"
 CF_SCOPES = "dns_records:read dns_records:edit zone:read offline_access"

@@ -6,8 +6,8 @@
   "version": "8.3",
   "category": "Web",
   "icon": "🅰️",
-  "summary": "Apache-Webserver für eine Webseite — PHP nachrüstbar.",
-  "description": "Apache-Webserver. Standardmäßig eine statische Seite; PHP 8.3 ist unter Einstellungen → Spezifisch mit einem Schalter aktivierbar. Jede Installation ist eigenständig (eigener Container, Port, Domain, Dateibereich). Für mehrere Webseiten mehrfach installieren.",
+  "summary": "Webseite mit Apache, PHP zuschaltbar",
+  "description": "",
   "runtime": "docker",
   "image": "php:8.3-apache",
   "container_port": 80,
@@ -25,7 +25,7 @@
     }
   ],
   "notes": [
-    "PHP ist standardmäßig aus (statische Seite). Zum Ausführen von .php-Dateien unter Einstellungen → Spezifisch „PHP aktivieren“ einschalten."
+    "PHP unter Einstellungen → Spezifisch einschalten."
   ],
   "fields": {
     "required": [

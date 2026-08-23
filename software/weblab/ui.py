@@ -8,7 +8,6 @@ TABS = [
     ("/network", "Netzwerk", "⇄"),
     ("/storage", "Speicher", "▤"),
     ("/users", "Benutzer", "◉"),
-    ("/settings", "Einstellungen", "⚙"),
 ]
 
 CSS = """
@@ -148,6 +147,31 @@ select{cursor:pointer}
 .msg.err{background:color-mix(in srgb,var(--bad) 8%,var(--panel));
  border-color:color-mix(in srgb,var(--bad) 26%,var(--line));color:var(--bad)}
 
+/* Fehler-Banner: bleibt auf allen Seiten, bis es geschlossen wird */
+.banner{display:flex;align-items:center;gap:12px;padding:11px 14px;border-radius:var(--r-sm);
+ margin-bottom:16px;font-size:13.5px;line-height:1.5;border:1px solid;
+ background:color-mix(in srgb,var(--bad) 8%,var(--panel));
+ border-color:color-mix(in srgb,var(--bad) 26%,var(--line));color:var(--bad)}
+.banner .txt{flex:1;min-width:0}
+.banner button{background:none;border:0;color:inherit;font-size:19px;line-height:1;
+ cursor:pointer;opacity:.65;padding:0 2px}
+.banner button:hover{opacity:1}
+
+/* Aufklappbare Bereiche */
+details.sec{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);
+ box-shadow:var(--sh);margin-bottom:13px}
+details.sec>summary{list-style:none;cursor:pointer;padding:15px 18px;font-weight:600;
+ font-size:14px;display:flex;align-items:center;justify-content:space-between;gap:10px}
+details.sec>summary::-webkit-details-marker{display:none}
+details.sec>summary::after{content:"⌄";color:var(--muted);font-size:15px;line-height:1}
+details.sec[open]>summary::after{content:"⌃"}
+details.sec[open]>summary{border-bottom:1px solid var(--line)}
+details.sec>.in{padding:16px 18px}
+.badge{display:inline-block;padding:1px 8px;border-radius:99px;font-size:11.5px;font-weight:600;
+ background:color-mix(in srgb,var(--accent) 12%,var(--panel));color:var(--accent);
+ border:1px solid color-mix(in srgb,var(--accent) 28%,var(--line))}
+.sub-in{max-width:210px}
+
 /* Katalog */
 .apps{display:grid;gap:13px;grid-template-columns:repeat(auto-fill,minmax(272px,1fr))}
 .appcard{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);
@@ -248,7 +272,24 @@ def _bar_class(percent):
     return "bad" if percent >= 90 else "warn" if percent >= 75 else "ok"
 
 
-def page(title, body, active="/", user=None, flash=None, head=""):
+def banner_html(text, token=""):
+    """Fehler-Banner, bleibt bis zum Schließen auf jeder Seite."""
+    if not text:
+        return ""
+    return (f'<div class="banner"><span class="txt">{esc(text)}</span>'
+            f'<form method="post" action="/banner"><input type="hidden" name="csrf" '
+            f'value="{esc(token)}"><button type="submit" aria-label="Schließen">&times;</button>'
+            f'</form></div>')
+
+
+def section(title, inner, open_=False, note=""):
+    """Aufklappbarer Bereich."""
+    tag = f'<span class="muted" style="font-weight:400">{esc(note)}</span>' if note else ""
+    return (f'<details class="sec"{" open" if open_ else ""}>'
+            f'<summary>{esc(title)}{tag}</summary><div class="in">{inner}</div></details>')
+
+
+def page(title, body, active="/", user=None, flash=None, head="", banner=""):
     nav = "".join(
         f'<a class="{"on" if path == active else ""}" href="{path}">'
         f'<span class="ic">{icon}</span>{esc(label)}</a>'
@@ -267,7 +308,7 @@ def page(title, body, active="/", user=None, flash=None, head=""):
 <body><div class="layout"><aside class="side">
 <div class="brand">weblab<small>Server-Verwaltung</small></div>
 <nav class="nav">{nav}</nav>{who}</aside>
-<main class="main">{msg}{body}</main></div>{INFO_OVERLAY}{GLOBAL_JS}</body></html>"""
+<main class="main">{banner}{msg}{body}</main></div>{INFO_OVERLAY}{GLOBAL_JS}</body></html>"""
 
 
 def bare(title, body, head=""):
@@ -455,8 +496,9 @@ GLOBAL_JS = """<script>
  document.querySelectorAll('[data-domain-widget]').forEach(function(w){
   var sub=w.querySelector('[data-domain-sub]'),zone=w.querySelector('[data-domain-zone]'),
       out=w.querySelector('[data-domain-out]');
+  var prev=w.querySelector('[data-domain-preview]');
   function upd(){if(!out)return;var z=zone?zone.value:'';var s=sub?sub.value.trim():'';
-   out.value=z?(s?s+'.'+z:z):'';}
+   out.value=z?(s?s+'.'+z:z):''; if(prev)prev.textContent=out.value?'→ '+out.value:'';}
   if(sub)sub.addEventListener('input',upd);if(zone)zone.addEventListener('change',upd);upd();
  });
 })();

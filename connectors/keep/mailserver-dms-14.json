@@ -6,8 +6,8 @@
   "version": "14",
   "category": "Mail",
   "icon": "✉️",
-  "summary": "Mailserver mit SMTP, IMAP, Spam- und Virenfilter.",
-  "description": "docker-mailserver: Postfix, Dovecot, Rspamd und Fail2ban mit sicheren Standardeinstellungen. Die Ports 25/143/465/587/993 stehen fest, weil MX-Einträge und Mailprogramme darauf angewiesen sind — daher nur einmal installierbar.",
+  "summary": "Mailserver mit SMTP, IMAP und Filtern",
+  "description": "",
   "runtime": "docker",
   "image": "mailserver/docker-mailserver:14",
   "container_port": 25,
@@ -174,10 +174,7 @@
   },
   "advanced": {},
   "notes": [
-    "Viele Anbieter sperren ausgehenden Port 25 — vorher beim Hoster freischalten lassen.",
-    "Nötige DNS-Einträge: A für mail.<domain>, MX auf mail.<domain>, SPF (TXT), DKIM (TXT) und DMARC (TXT).",
-    "Der PTR-/Reverse-Eintrag der Server-IP muss auf mail.<domain> zeigen — das stellt der Hoster ein.",
-    "Der DKIM-Schlüssel wird beim ersten Start erzeugt; den TXT-Eintrag danach im Reiter DNS ergänzen."
+    "Viele Anbieter sperren ausgehenden Port 25 — vorher beim Hoster freischalten lassen."
   ],
   "hostname_template": "{mail_hostname}.{mail_domain}",
   "post_install": {

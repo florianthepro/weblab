@@ -6,8 +6,8 @@
   "version": "1.27",
   "category": "Web",
   "icon": "🌐",
-  "summary": "Nginx-Webserver für eine Webseite — PHP nachrüstbar.",
-  "description": "Schlanker Nginx-Webserver (mit optionalem PHP-FPM 8.3). Standardmäßig eine statische Seite; PHP ist unter Einstellungen → Spezifisch mit einem Schalter aktivierbar. Jede Installation ist eigenständig. Für mehrere Webseiten mehrfach installieren.",
+  "summary": "Webseite mit Nginx, PHP zuschaltbar",
+  "description": "",
   "runtime": "docker",
   "image": "trafex/php-nginx:3.7.0",
   "container_port": 8080,
@@ -25,7 +25,7 @@
     }
   ],
   "notes": [
-    "PHP ist standardmäßig aus (statische Seite). Zum Ausführen von .php-Dateien unter Einstellungen → Spezifisch „PHP aktivieren“ einschalten."
+    "PHP unter Einstellungen → Spezifisch einschalten."
   ],
   "fields": {
     "required": [

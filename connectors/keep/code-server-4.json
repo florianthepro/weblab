@@ -5,8 +5,8 @@
   "version": "4",
   "category": "Werkzeuge",
   "icon": "💻",
-  "summary": "VS Code im Browser — Entwickeln von überall.",
-  "description": "Visual Studio Code als Weboberfläche. Zugang mit dem hier gesetzten Passwort.",
+  "summary": "VS Code im Browser",
+  "description": "",
   "runtime": "docker",
   "image": "lscr.io/linuxserver/code-server:latest",
   "container_port": 8443,
@@ -22,9 +22,6 @@
     "PGID": "1000",
     "TZ": "Europe/Berlin"
   },
-  "notes": [
-    "Nur über HTTPS mit eigener Domain betreiben."
-  ],
   "fields": {
     "required": [
       {

@@ -5,8 +5,8 @@
   "version": "2024",
   "category": "Werkzeuge",
   "icon": "🧰",
-  "summary": "Sammlung praktischer Entwickler-/IT-Werkzeuge im Browser.",
-  "description": "Viele kleine Helfer (Formatierer, Konverter, Generatoren) in einer Oberfläche. Ohne Anmeldung — bei Bedarf auf erlaubte IPs beschränken.",
+  "summary": "Werkzeugsammlung",
+  "description": "",
   "runtime": "docker",
   "image": "corentinth/it-tools:latest",
   "container_port": 80,
@@ -19,7 +19,7 @@
   },
   "env": {},
   "notes": [
-    "Keine Anmeldung — bei sensiblem Einsatz Erreichbarkeit auf „Spezifisch“ beschränken."
+    "Ohne Anmeldung erreichbar."
   ],
   "fields": {
     "required": [],

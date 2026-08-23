@@ -5,8 +5,8 @@
   "version": "4",
   "category": "Web",
   "icon": "🗄️",
-  "summary": "Datenbank-Oberfläche im Browser (MySQL/MariaDB/PostgreSQL).",
-  "description": "Leichte Weboberfläche zum Verwalten von Datenbanken. Am Login gibst du Server, Benutzer und Passwort der Datenbank ein.",
+  "summary": "Datenbank-Oberfläche",
+  "description": "",
   "runtime": "docker",
   "image": "adminer:4",
   "container_port": 8080,
@@ -19,7 +19,7 @@
   },
   "env": {},
   "notes": [
-    "Datenbank-Oberfläche: am besten auf erlaubte IPs beschränken (Erreichbarkeit: Spezifisch)."
+    "Am besten auf erlaubte IPs beschränken."
   ],
   "fields": {
     "required": [],
