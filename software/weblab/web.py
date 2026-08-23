@@ -716,8 +716,7 @@ class Handler(BaseHTTPRequestHandler):
             content = f"""<form method="post" action="/apps/{app['id']}/edit?section=specific">
 {ui.csrf_input(self.csrf)}<input type="hidden" name="section" value="specific">
 <div class="card"><h3>App-spezifische Einstellungen</h3>
-<p class="help" style="margin-bottom:14px">Vom Connector definiert, wird in die
-Konfiguration der App geschrieben.</p>{inner}
+{inner}
 <button class="btn primary" type="submit">Speichern</button></div></form>"""
         elif section == "advanced" and has_advanced:
             content = self._plugins_section(app, connector)
@@ -735,8 +734,8 @@ Konfiguration der App geschrieben.</p>{inner}
             content = f"""<form method="post" action="/apps/{app['id']}/edit?section=basic">
 {ui.csrf_input(self.csrf)}<input type="hidden" name="section" value="basic">
 <div class="card"><h3>Basis-Einstellungen</h3>
-<p class="help" style="margin-bottom:14px">Gilt für alle Apps. Änderungen erstellen den
-Container neu; die Daten bleiben erhalten.</p>
+<p class="help" style="margin-bottom:14px">Änderungen erstellen den Container neu;
+die Daten bleiben erhalten.</p>
 <div class="grid g2">
 <div><div class="field"><label for="name">Name</label>
  <input id="name" name="name" value="{ui.esc(app['name'])}" required></div>
@@ -903,8 +902,7 @@ werden danach je App automatisch angelegt. Zwei Wege:</p>
 <div class="grid g2">
 <div>
 <h3>1 · Mit Cloudflare anmelden</h3>
-<p class="help" style="margin-bottom:10px">Anmeldung direkt bei Cloudflare, ohne Zugangsdaten
-im Panel. Voraussetzung: ein OAuth-Client im Cloudflare-Konto
+<p class="help" style="margin-bottom:10px">Voraussetzung: ein OAuth-Client im Cloudflare-Konto
 (Konto verwalten → OAuth clients → Create client) mit dieser Rückleitung:</p>
 <p class="help mono" style="word-break:break-all;margin-bottom:10px">{ui.esc(redirect_uri)}</p>
 <form method="post" action="/network">{ui.csrf_input(self.csrf)}
@@ -1165,8 +1163,7 @@ Daraus entsteht ein Token nur für DNS, gültig ein Jahr. Der Schlüssel wird ni
 <tr><th>Gerät</th><th>Größe</th><th>Typ</th><th>Eingehängt</th><th>Modell</th></tr>{disk_rows}</table></div></div>
 <h2>Daten der Apps</h2>
 <div class="card"><div class="tbl-wrap"><table>
-<tr><th>App</th><th>Pfad</th><th>Belegt</th></tr>{app_rows}</table></div>
-<p class="help">Laufwerk je App: unter App → Einstellungen → Basis.</p></div>"""
+<tr><th>App</th><th>Pfad</th><th>Belegt</th></tr>{app_rows}</table></div></div>"""
         self._render("Speicher", body, "/storage")
 
     def page_users(self):
