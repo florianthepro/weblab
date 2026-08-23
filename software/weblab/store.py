@@ -207,3 +207,42 @@ def delete_app(app_id):
 def used_host_ports():
     with connect() as conn:
         return {r["host_port"] for r in conn.execute("SELECT host_port FROM apps")}
+
+
+# ---------- Cloudflare-Konten (mehrere) ----------
+def cf_accounts():
+    """Liste verknüpfter Cloudflare-Konten: [{id,label,token}]. Migriert Alt-Einzeltoken."""
+    raw = get_setting("cf_accounts", "")
+    accounts = []
+    if raw:
+        try:
+            accounts = json.loads(raw)
+        except json.JSONDecodeError:
+            accounts = []
+    if not accounts:
+        legacy = get_setting("cf_token", "")
+        if legacy:
+            accounts = [{"id": "legacy", "label": get_setting("cf_account", "") or "Cloudflare",
+                         "token": legacy}]
+            set_setting("cf_accounts", json.dumps(accounts))
+    return accounts
+
+
+def add_cf_account(label, token):
+    accounts = cf_accounts()
+    acc_id = hashlib.sha1(token.encode()).hexdigest()[:8]
+    accounts = [a for a in accounts if a.get("id") != acc_id]
+    accounts.append({"id": acc_id, "label": label or "Cloudflare", "token": token})
+    set_setting("cf_accounts", json.dumps(accounts))
+    set_setting("cf_token", token)          # Rückwärtskompatibilität (erstes Konto)
+    return acc_id
+
+
+def remove_cf_account(acc_id):
+    accounts = [a for a in cf_accounts() if a.get("id") != acc_id]
+    set_setting("cf_accounts", json.dumps(accounts))
+    set_setting("cf_token", accounts[0]["token"] if accounts else "")
+
+
+def cf_connected():
+    return bool(cf_accounts())

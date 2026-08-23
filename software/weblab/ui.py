@@ -192,6 +192,51 @@ textarea{font-family:var(--mono);line-height:1.6;resize:vertical}
 .progress{height:6px;background:var(--line);border-radius:99px;overflow:hidden;margin:20px 0 8px}
 .progress>i{display:block;height:100%;width:0;background:var(--accent);border-radius:99px;
  transition:width .5s ease}
+
+/* Gesperrte Felder */
+.field.locked > input,.field.locked > select,.field.locked > textarea{
+ border-color:var(--bad);background:color-mix(in srgb,var(--bad) 6%,var(--panel));
+ color:var(--muted);cursor:not-allowed}
+.field.unlocked > input,.field.unlocked > select,.field.unlocked > textarea{
+ border-color:var(--warn);box-shadow:0 0 0 3px color-mix(in srgb,var(--warn) 16%,transparent)}
+.lockrow{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:0 0 6px}
+.lockrow label{margin:0}
+.locktag{font-size:11px;color:var(--bad);font-weight:600;white-space:nowrap}
+.lockbtn{font-size:11.5px;font-weight:600;color:var(--bad);background:none;border:1px solid
+ color-mix(in srgb,var(--bad) 30%,var(--line));border-radius:99px;padding:1px 9px;cursor:pointer}
+.lockbtn:hover{background:color-mix(in srgb,var(--bad) 8%,var(--panel))}
+.readonly-val{padding:8px 11px;border:1px solid var(--line);border-radius:var(--r-sm);
+ background:var(--panel-2);color:var(--ink-2);font-size:14px;display:flex;
+ justify-content:space-between;align-items:center;gap:8px}
+
+/* Info-Overlay */
+.infobtn{position:fixed;right:18px;bottom:18px;z-index:60;width:42px;height:42px;
+ border-radius:50%;border:1px solid var(--line);background:var(--panel);color:var(--accent);
+ font-size:19px;font-weight:700;cursor:pointer;box-shadow:var(--sh-2);line-height:1}
+.infobtn:hover{background:var(--panel-2)}
+.infopanel{position:fixed;right:18px;bottom:70px;z-index:60;width:310px;
+ max-width:calc(100vw - 36px);background:var(--panel);border:1px solid var(--line);
+ border-radius:var(--r);box-shadow:var(--sh-2);padding:14px 16px;display:none}
+.infopanel.show{display:block}
+.infopanel h4{margin:0 0 6px;font-size:11.5px;text-transform:uppercase;letter-spacing:.05em;
+ color:var(--muted)}
+.infopanel .ibody{font-size:13px;line-height:1.55;color:var(--ink-2)}
+
+/* Dialog */
+dialog{border:1px solid var(--line);border-radius:var(--r);padding:0;
+ max-width:min(720px,94vw);width:100%;background:var(--panel);color:var(--ink);
+ box-shadow:var(--sh-2)}
+dialog::backdrop{background:rgba(8,11,15,.5)}
+dialog .dhead{display:flex;justify-content:space-between;align-items:center;
+ padding:15px 18px;border-bottom:1px solid var(--line)}
+dialog .dhead h3{margin:0}
+dialog .dbody{padding:18px;max-height:76vh;overflow:auto}
+dialog .x{background:none;border:0;font-size:22px;line-height:1;cursor:pointer;color:var(--muted)}
+dialog .x:hover{color:var(--ink)}
+.chip{display:inline-flex;align-items:center;gap:8px;padding:5px 6px 5px 12px;border-radius:99px;
+ border:1px solid var(--line);background:var(--panel-2);font-size:13px;margin:0 6px 6px 0}
+.acctrow{border:1px solid var(--line);border-radius:var(--r-sm);padding:11px 14px;
+ background:var(--panel-2);margin-bottom:8px}
 """
 
 
@@ -222,14 +267,14 @@ def page(title, body, active="/", user=None, flash=None, head=""):
 <body><div class="layout"><aside class="side">
 <div class="brand">weblab<small>Server-Verwaltung</small></div>
 <nav class="nav">{nav}</nav>{who}</aside>
-<main class="main">{msg}{body}</main></div></body></html>"""
+<main class="main">{msg}{body}</main></div>{INFO_OVERLAY}{GLOBAL_JS}</body></html>"""
 
 
 def bare(title, body, head=""):
     return f"""<!doctype html><html lang="de"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{esc(title)} — weblab</title><style>{CSS}</style>{head}</head>
-<body><div class="center">{body}</div></body></html>"""
+<body><div class="center">{body}</div>{INFO_OVERLAY}{GLOBAL_JS}</body></html>"""
 
 
 def stat(label, value, percent=None, note=""):
@@ -252,73 +297,168 @@ def status_pill(state):
     return f'<span class="pill err"><span class="dot"></span>{esc(state)}</span>'
 
 
-def field_input(field, value, prefix=""):
-    """Ein Formularfeld aus der Connector-Definition rendern."""
+def _info_attr(text):
+    return f' data-info="{esc(text)}"' if text else ""
+
+
+def _label_row(key, label, locked):
+    """Label-Zeile; bei gesperrten Feldern mit rotem Hinweis und Freischalten-Knopf."""
+    if locked:
+        return (f'<div class="lockrow"><label for="{esc(key)}">{esc(label)} '
+                f'<span class="locktag">🔒 im Betrieb gesperrt</span></label>'
+                f'<button type="button" class="lockbtn" data-unlock="{esc(key)}">'
+                f'Freischalten</button></div>')
+    return f'<label for="{esc(key)}">{esc(label)}</label>'
+
+
+def field_input(field, value, prefix="", locked=False):
+    """Ein Formularfeld aus der Connector-Definition rendern.
+
+    locked: Feld ist im Betrieb nicht änderbar (gesperrt, rot; erst freischalten).
+    Der Hilfetext des Feldes wandert ins Info-Overlay (data-info).
+    """
     key = prefix + field["key"]
     ftype = field.get("type", "string")
     label = field.get("label", field["key"])
-    required = " required" if field.get("required") else ""
-    help_html = f'<p class="help">{esc(field["help"])}</p>' if field.get("help") else ""
+    locked = locked or field.get("locked", False)
+    required = "" if locked else (" required" if field.get("required") else "")
+    dis = " disabled" if locked else ""
+    info = _info_attr(field.get("help", ""))
     depends = ""
     if field.get("depends_on"):
         depends = f' data-depends=\'{html.escape(json.dumps(field["depends_on"]), quote=True)}\''
+    wrap = "field locked" if locked else "field"
 
     if ftype == "bool":
         checked = " checked" if value else ""
+        locktag = '<span class="locktag">🔒</span>' if locked else ""
+        lockbtn = (f'<button type="button" class="lockbtn" data-unlock="{esc(key)}">'
+                   f'Freischalten</button>') if locked else ""
         control = (f'<div class="check"><input type="checkbox" id="{esc(key)}" '
-                   f'name="{esc(key)}" value="1"{checked}>'
-                   f'<label for="{esc(key)}">{esc(label)}</label></div>')
-        return f'<div class="field"{depends}>{control}{help_html}</div>'
+                   f'name="{esc(key)}" value="1"{checked}{dis}{info}>'
+                   f'<label for="{esc(key)}">{esc(label)} {locktag}</label>{lockbtn}'
+                   f'</div>')
+        return f'<div class="{wrap}"{depends}>{control}</div>'
 
     if ftype == "select":
         labels = field.get("option_labels", {})
         options = "".join(
             f'<option value="{esc(opt)}"{" selected" if str(value) == str(opt) else ""}>'
             f'{esc(labels.get(opt, opt))}</option>' for opt in field.get("options", []))
-        control = f'<select id="{esc(key)}" name="{esc(key)}">{options}</select>'
+        control = f'<select id="{esc(key)}" name="{esc(key)}"{dis}{info}>{options}</select>'
     elif ftype == "number":
         attrs = ""
         for attr in ("min", "max", "step"):
             if attr in field:
                 attrs += f' {attr}="{esc(field[attr])}"'
         control = (f'<input type="number" id="{esc(key)}" name="{esc(key)}" '
-                   f'value="{esc(value)}"{attrs}{required}>')
+                   f'value="{esc(value)}"{attrs}{required}{dis}{info}>')
     elif ftype == "password":
         control = (f'<input type="password" id="{esc(key)}" name="{esc(key)}" '
-                   f'value="" autocomplete="new-password"{required}>')
+                   f'value="" autocomplete="new-password"{required}{dis}{info}>')
     elif ftype == "textarea":
-        control = f'<textarea id="{esc(key)}" name="{esc(key)}" rows="5">{esc(value)}</textarea>'
+        control = (f'<textarea id="{esc(key)}" name="{esc(key)}" rows="5"{dis}{info}>'
+                   f'{esc(value)}</textarea>')
     else:
         control = (f'<input type="text" id="{esc(key)}" name="{esc(key)}" '
-                   f'value="{esc(value)}"{required}>')
-    return (f'<div class="field"{depends}><label for="{esc(key)}">{esc(label)}</label>'
-            f'{control}{help_html}</div>')
+                   f'value="{esc(value)}"{required}{dis}{info}>')
+    return f'<div class="{wrap}"{depends}>{_label_row(key, label, locked)}{control}</div>'
 
 
-def select_field(key, label, options, value, help_text="", option_labels=None):
+def select_field(key, label, options, value, help_text="", option_labels=None, locked=False):
     option_labels = option_labels or {}
     opts = "".join(
         f'<option value="{esc(o)}"{" selected" if str(value) == str(o) else ""}>'
         f'{esc(option_labels.get(o, o))}</option>' for o in options)
-    help_html = f'<p class="help">{esc(help_text)}</p>' if help_text else ""
-    return (f'<div class="field"><label for="{esc(key)}">{esc(label)}</label>'
-            f'<select id="{esc(key)}" name="{esc(key)}">{opts}</select>{help_html}</div>')
+    dis = " disabled" if locked else ""
+    wrap = "field locked" if locked else "field"
+    return (f'<div class="{wrap}">{_label_row(key, label, locked)}'
+            f'<select id="{esc(key)}" name="{esc(key)}"{dis}{_info_attr(help_text)}>'
+            f'{opts}</select></div>')
+
+
+def readonly_field(label, value, note=""):
+    """Nicht änderbarer Wert (z. B. Version) — nur Anzeige."""
+    tag = f'<span class="locktag">🔒 {esc(note)}</span>' if note else ""
+    return (f'<div class="field"><label>{esc(label)}</label>'
+            f'<div class="readonly-val"><span class="mono">{esc(value)}</span>{tag}</div></div>')
 
 
 def csrf_input(token):
     return f'<input type="hidden" name="csrf" value="{esc(token)}">'
 
 
-DEPENDS_JS = """<script>
-document.addEventListener('DOMContentLoaded',function(){
- var fields=[].slice.call(document.querySelectorAll('[data-depends]'));
- function sync(){fields.forEach(function(el){
-   var cond=JSON.parse(el.getAttribute('data-depends'));var show=true;
-   Object.keys(cond).forEach(function(k){
-     var src=document.querySelector('[name="'+k+'"]');
-     if(src&&String(src.value)!==String(cond[k]))show=false;});
+def modal(dialog_id, title, inner):
+    """Ein per Knopf öffnendes Overlay (<dialog>)."""
+    return (f'<dialog id="{esc(dialog_id)}"><div class="dhead"><h3>{esc(title)}</h3>'
+            f'<button class="x" type="button" onclick="this.closest(\'dialog\').close()"'
+            f' aria-label="Schließen">&times;</button></div>'
+            f'<div class="dbody">{inner}</div></dialog>')
+
+
+def open_button(dialog_id, label, cls="btn primary"):
+    return (f'<button type="button" class="{cls}" '
+            f'onclick="document.getElementById(\'{esc(dialog_id)}\').showModal()">{esc(label)}</button>')
+
+
+DEPENDS_JS = ""  # Interaktive Logik liegt global in GLOBAL_JS (page/bare).
+
+INFO_OVERLAY = """
+<button type="button" class="infobtn" id="infoBtn" title="Hinweise ein-/ausblenden">&#9432;</button>
+<aside class="infopanel" id="infoPanel"><h4>Hinweis</h4>
+<div class="ibody" id="infoBody">Ein Feld anklicken oder überfahren zeigt hier Hinweise.</div></aside>
+"""
+
+GLOBAL_JS = """<script>
+(function(){
+ // Info-Overlay
+ var btn=document.getElementById('infoBtn'),panel=document.getElementById('infoPanel'),
+     body=document.getElementById('infoBody');
+ var DEF='Ein Feld anklicken oder überfahren zeigt hier Hinweise.';
+ function shown(){return panel&&panel.classList.contains('show');}
+ function persist(v){try{localStorage.setItem('weblab_info',v?'1':'0');}catch(e){}}
+ if(btn&&panel){
+  try{if(localStorage.getItem('weblab_info')==='1')panel.classList.add('show');}catch(e){}
+  btn.addEventListener('click',function(){panel.classList.toggle('show');persist(shown());});
+  function set(t){if(body)body.textContent=t||DEF;}
+  function info(e){var el=e.target.closest('[data-info]');
+    return el&&el.getAttribute('data-info')?el.getAttribute('data-info'):null;}
+  // Anklicken/Auswählen eines Feldes öffnet das Overlay und zeigt dessen Hinweis.
+  document.addEventListener('focusin',function(e){var t=info(e);if(t===null)return;
+    if(!shown()){panel.classList.add('show');persist(true);} set(t);});
+  // Überfahren mit der Maus aktualisiert den Hinweis nur, wenn das Overlay offen ist.
+  document.addEventListener('mouseover',function(e){if(!shown())return;var t=info(e);if(t!==null)set(t);});
+ }
+ // Gesperrte Felder freischalten
+ document.querySelectorAll('[data-unlock]').forEach(function(b){
+  b.addEventListener('click',function(){
+   var f=document.getElementById(b.getAttribute('data-unlock'));if(!f)return;
+   var wrap=f.closest('.field');
+   if(f.disabled){f.disabled=false;f.focus();if(wrap){wrap.classList.remove('locked');wrap.classList.add('unlocked');}
+     b.textContent='Sperren';
+     if(body){body.textContent='Achtung: Diese Änderung erstellt den Container neu. '
+       +'Daten bleiben erhalten, die App startet aber neu.';}
+     if(panel)panel.classList.add('show');
+   }else{f.disabled=true;if(wrap){wrap.classList.add('locked');wrap.classList.remove('unlocked');}
+     b.textContent='Freischalten';}
+  });
+ });
+ // Abhängige Felder (depends_on)
+ var deps=[].slice.call(document.querySelectorAll('[data-depends]'));
+ function sync(){deps.forEach(function(el){
+   var cond=JSON.parse(el.getAttribute('data-depends')),show=true;
+   Object.keys(cond).forEach(function(k){var s=document.querySelector('[name="'+k+'"]');
+     if(s&&String(s.value)!==String(cond[k]))show=false;});
    el.style.display=show?'':'none';});}
- document.querySelectorAll('select,input').forEach(function(el){
-   el.addEventListener('change',sync);});
- sync();});
+ document.querySelectorAll('select,input').forEach(function(e){e.addEventListener('change',sync);});
+ sync();
+ // Domain zusammensetzen (Subdomain + Zone -> verstecktes Feld 'domain')
+ document.querySelectorAll('[data-domain-widget]').forEach(function(w){
+  var sub=w.querySelector('[data-domain-sub]'),zone=w.querySelector('[data-domain-zone]'),
+      out=w.querySelector('[data-domain-out]');
+  function upd(){if(!out)return;var z=zone?zone.value:'';var s=sub?sub.value.trim():'';
+   out.value=z?(s?s+'.'+z:z):'';}
+  if(sub)sub.addEventListener('input',upd);if(zone)zone.addEventListener('change',upd);upd();
+ });
+})();
 </script>"""

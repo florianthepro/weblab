@@ -149,23 +149,23 @@ def dns_plan(app, connector, values, server_ip):
 
 
 def apply_dns(app, connector, values):
-    """DNS-Einträge der App automatisch anlegen (wenn ein Cloudflare-Konto verknüpft ist)."""
-    token = store.get_setting("cf_token", "")
-    if not token:
+    """DNS-Einträge der App automatisch anlegen — über alle verknüpften Konten hinweg."""
+    accounts = store.cf_accounts()
+    if not accounts:
         return [], "Kein Cloudflare-Konto verknüpft — Einträge bitte manuell setzen."
     server_ip = store.get_setting("server_ip", "") or sysinfo.public_ip()
     plan = dns_plan(app, connector, values, server_ip)
     if not plan:
         return [], None
-    cloudflare = integrations.Cloudflare(token)
+    zones = integrations.all_zones(accounts)
     done, problems = [], []
     for record in plan:
-        zone = _zone_for(cloudflare, record["name"])
-        if not zone:
-            problems.append(f"{record['name']}: keine passende Domain im Cloudflare-Konto")
+        match = _zone_match(zones, record["name"])
+        if not match:
+            problems.append(f"{record['name']}: keine passende Domain im Konto")
             continue
-        ok, err = cloudflare.set_record(
-            zone, record["name"], record["content"], record["type"],
+        ok, err = integrations.Cloudflare(match["token"]).set_record(
+            match["name"], record["name"], record["content"], record["type"],
             proxied=record["proxied"], priority=record.get("priority"),
             comment=record.get("comment"))
         if ok:
@@ -175,14 +175,14 @@ def apply_dns(app, connector, values):
     return done, ("; ".join(problems) if problems else None)
 
 
-def _zone_for(cloudflare, hostname):
-    """Passende Zone zu einem Hostnamen finden (längste Übereinstimmung)."""
-    try:
-        zones = [z["name"] for z in cloudflare.zones()]
-    except Exception:  # noqa: BLE001
-        return None
-    matches = [z for z in zones if hostname == z or hostname.endswith("." + z)]
-    return max(matches, key=len) if matches else None
+def _zone_match(zones, hostname):
+    """Zone (mit Token) zu einem Hostnamen — längste Übereinstimmung."""
+    best, best_len = None, -1
+    for zone in zones:
+        z = zone["name"]
+        if (hostname == z or hostname.endswith("." + z)) and len(z) > best_len:
+            best, best_len = zone, len(z)
+    return best
 
 
 def sync_proxy():

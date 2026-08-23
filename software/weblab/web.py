@@ -87,8 +87,7 @@ def run_setup(username, password, domain, cf_email="", cf_key=""):
                 SETUP_STATE.update({"percent": 40, "step": "Cloudflare-Konto verknüpfen"})
                 cf_token, err = integrations.link_account(cf_email, cf_key, label=domain or "weblab")
                 if cf_token:
-                    store.set_setting("cf_token", cf_token)
-                    store.set_setting("cf_account", cf_email)
+                    store.add_cf_account(cf_email or "Cloudflare", cf_token)
                     store.set_setting("cf_status", "verknüpft")
                 else:
                     store.set_setting("cf_status", f"nicht verknüpft: {err or ''}")
@@ -332,9 +331,11 @@ class Handler(BaseHTTPRequestHandler):
 <div class="steps"><div class="on">1 · Konto &amp; Domain</div><div>2 · Einrichtung</div><div>3 · Fertig</div></div>
 <form method="post" action="/setup">
  <div class="field"><label for="username">Admin-Benutzer</label>
-  <input id="username" name="username" value="admin" required autocomplete="username"></div>
+  <input id="username" name="username" type="text" value="admin" required autocomplete="username"
+   autocapitalize="none" autocorrect="off" spellcheck="false"></div>
  <div class="field"><label for="password">Passwort</label>
-  <input id="password" name="password" type="password" required minlength="10" autocomplete="new-password">
+  <input id="password" name="password" type="password" required minlength="10"
+   autocomplete="new-password" autocapitalize="none" autocorrect="off" spellcheck="false">
   <p class="help">Mindestens 10 Zeichen.</p></div>
  <div class="field"><label for="domain">Verwaltungs-Domain</label>
   <input id="domain" name="domain" placeholder="example.com" required>
@@ -394,11 +395,13 @@ class Handler(BaseHTTPRequestHandler):
         domain = store.get_setting("manage_domain", "")
         body = f"""<div class="box"><div class="card">
 <h1>Anmelden</h1><p class="sub">{ui.esc(domain) or 'weblab'}</p>{msg}
-<form method="post" action="/login">
+<form method="post" action="/login" id="loginform" name="loginform" autocomplete="on">
  <div class="field"><label for="username">Benutzer</label>
-  <input id="username" name="username" required autocomplete="username" autofocus></div>
+  <input id="username" name="username" type="text" required autocomplete="username"
+   autocapitalize="none" autocorrect="off" spellcheck="false" autofocus></div>
  <div class="field"><label for="password">Passwort</label>
-  <input id="password" name="password" type="password" required autocomplete="current-password"></div>
+  <input id="password" name="password" type="password" required
+   autocomplete="current-password" autocapitalize="none" autocorrect="off" spellcheck="false"></div>
  <button class="btn primary" type="submit" style="width:100%">Anmelden</button>
 </form></div></div>"""
         self._send(ui.bare("Anmelden", body),
@@ -521,6 +524,44 @@ class Handler(BaseHTTPRequestHandler):
 <div class="apps">{tiles}</div>"""
         self._render("Apps", body, "/apps")
 
+    def _domain_field(self, current="", placeholder=""):
+        """Domain-Feld: bei verknüpftem Cloudflare nur vorhandene Zonen
+        (Subdomain + Zone), sonst freies Textfeld."""
+        zones = integrations.all_zones(store.cf_accounts())
+        if not zones:
+            info = ui._info_attr("Optional. Ohne verknüpftes DNS-Konto den Eintrag "
+                                 "bitte manuell im DNS setzen.")
+            return (f'<div class="field"><label for="domain">Domain</label>'
+                    f'<input id="domain" name="domain" value="{ui.esc(current)}" '
+                    f'placeholder="{ui.esc(placeholder)}"{info}></div>')
+        zone_names = [z["name"] for z in zones]
+        sub, sel_zone, matched = "", zone_names[0], False
+        for z in sorted(zone_names, key=len, reverse=True):
+            if current == z:
+                sub, sel_zone, matched = "", z, True
+                break
+            if current.endswith("." + z):
+                sub, sel_zone, matched = current[: -(len(z) + 1)], z, True
+                break
+        # Bestehende Domain außerhalb der verknüpften Zonen behalten (nicht überschreiben).
+        extra = ""
+        if current and not matched:
+            sel_zone = current
+            extra = f'<option value="{ui.esc(current)}" selected>{ui.esc(current)}</option>'
+        zone_opts = extra + "".join(
+            f'<option value="{ui.esc(z)}"'
+            f'{" selected" if z == sel_zone else ""}>{ui.esc(z)}</option>'
+            for z in zone_names)
+        info = ui._info_attr("Nur Domains deiner verknüpften DNS-Konten. Links optional eine "
+                             "Subdomain, rechts die Zone. Leer lassen = Hauptdomain.")
+        return (f'<div class="field" data-domain-widget><label for="domain_sub">Domain</label>'
+                f'<div class="row" style="gap:8px;align-items:center">'
+                f'<input id="domain_sub" data-domain-sub value="{ui.esc(sub)}" '
+                f'placeholder="app" style="flex:1"{info}>'
+                f'<span class="muted">.</span>'
+                f'<select data-domain-zone aria-label="Zone" style="flex:1">{zone_opts}</select></div>'
+                f'<input type="hidden" name="domain" data-domain-out value="{ui.esc(current)}"></div>')
+
     def page_catalog_detail(self, group_id):
         group = catalog.get_group(group_id)
         if not group:
@@ -561,9 +602,7 @@ class Handler(BaseHTTPRequestHandler):
  <div class="card"><h3>2 · Basis (für alle Apps gleich)</h3>
   <div class="field"><label for="name">Name</label>
    <input id="name" name="name" value="{ui.esc(group['name'])}" required></div>
-  <div class="field"><label for="domain">Domain</label>
-   <input id="domain" name="domain" placeholder="app.{ui.esc(store.get_setting('manage_domain', 'example.com'))}">
-   <p class="help">{'Wird per HTTPS veröffentlicht.' if connector.get('http') else 'Diese App läuft über einen Port, nicht über HTTP.'}</p></div>
+  {self._domain_field('', f"app.{store.get_setting('manage_domain', 'example.com')}")}
   {ui.select_field('exposure', 'Erreichbarkeit', ['external', 'internal', 'specific'], exposure_default,
                    'Intern = nur dieser Server. Spezifisch = nur erlaubte IPs.',
                    {'external': 'Extern (öffentlich)', 'internal': 'Intern (nur Server)',
@@ -722,25 +761,25 @@ class Handler(BaseHTTPRequestHandler):
             content = self._plugins_section(app, connector)
         else:
             locations = sysinfo.data_locations()
-            loc_options = "".join(
-                f'<option value="{ui.esc(l["path"])}"'
-                f'{" selected" if l["path"] == app["data_path"] else ""}>'
-                f'{ui.esc(l["mount"])} · {ui.esc(sysinfo.human_bytes(l["free"]))} frei</option>'
-                for l in locations)
+            loc_paths = [l["path"] for l in locations]
+            if app["data_path"] not in loc_paths:
+                loc_paths.append(app["data_path"])
+            loc_labels = {l["path"]: f'{l["mount"]} · {sysinfo.human_bytes(l["free"])} frei'
+                          for l in locations}
+            loc_labels.setdefault(app["data_path"], app["data_path"])
             networks = [n["Name"] for n in dockerctl.networks()] if dockerctl.available() else ["bridge"]
-            net_options = "".join(
-                f'<option value="{ui.esc(n)}"{" selected" if n == app["network"] else ""}>'
-                f'{ui.esc(n)}</option>' for n in networks)
+            if app["network"] not in networks:
+                networks.append(app["network"])
             content = f"""<form method="post" action="/apps/{app['id']}/edit?section=basic">
 {ui.csrf_input(self.csrf)}<input type="hidden" name="section" value="basic">
 <div class="card"><h3>Basis-Einstellungen</h3>
-<p class="help" style="margin-bottom:14px">Änderungen erstellen den Container neu;
-die Daten bleiben erhalten.</p>
+<p class="help" style="margin-bottom:14px">Änderungen erstellen den Container neu; die Daten
+bleiben erhalten. Rot umrandete Felder ändern den Aufbau grundlegend — erst freischalten.</p>
 <div class="grid g2">
-<div><div class="field"><label for="name">Name</label>
+<div>{ui.readonly_field('Version', app['version'], 'nur bei Installation wählbar')}
+<div class="field"><label for="name">Name</label>
  <input id="name" name="name" value="{ui.esc(app['name'])}" required></div>
-<div class="field"><label for="domain">Domain</label>
- <input id="domain" name="domain" value="{ui.esc(app['domain'])}"></div>
+{self._domain_field(app['domain'])}
 {ui.select_field('exposure', 'Erreichbarkeit', ['external', 'internal', 'specific'], app['exposure'],
                  'Intern = nur dieser Server. Spezifisch = nur erlaubte IPs.',
                  {'external': 'Extern (öffentlich)', 'internal': 'Intern (nur Server)',
@@ -751,12 +790,14 @@ die Daten bleiben erhalten.</p>
 <div class="field"><label for="host_port">Port (extern)</label>
  <input id="host_port" name="host_port" type="number" value="{ui.esc(app['host_port'])}"></div>
 </div>
-<div>{ui.select_field('location', 'Ablageort', ['docker', 'device'], app['location'], '',
-                      {'docker': 'Docker (Container)', 'device': 'Auf dem Gerät (Host)'})}
-<div class="field"><label for="data_path">Datenlaufwerk</label>
- <select id="data_path" name="data_path">{loc_options}</select></div>
-<div class="field"><label for="network">Netzwerk / Subnetz</label>
- <select id="network" name="network">{net_options}</select></div>
+<div>{ui.select_field('location', 'Ablageort', ['docker', 'device'], app['location'],
+                      'Wechsel setzt die App neu auf.',
+                      {'docker': 'Docker (Container)', 'device': 'Auf dem Gerät (Host)'}, locked=True)}
+{ui.select_field('data_path', 'Datenlaufwerk', loc_paths, app['data_path'],
+                 'Ein anderes Laufwerk setzt die App mit leeren Daten neu auf.', loc_labels, locked=True)}
+{ui.select_field('network', 'Netzwerk / Subnetz', networks, app['network'],
+                 'Wechsel des Subnetzes erstellt den Container neu.',
+                 {n: n for n in networks})}
 <div class="field"><label for="cpu">CPU (Kerne)</label>
  <input id="cpu" name="cpu" type="number" step="0.1" min="0.1" value="{ui.esc(app['cpu'])}"></div>
 <div class="field"><label for="ram_mb">RAM (MB)</label>
@@ -877,29 +918,40 @@ die Daten bleiben erhalten.</p>
 
     # Netzwerk / DNS / Speicher / Benutzer / Einstellungen
     def _cloudflare_block(self):
-        domain = store.get_setting("manage_domain", "")
-        server_ip = store.get_setting("server_ip", "")
-        if store.get_setting("cf_token", ""):
-            cloudflare = integrations.Cloudflare(store.get_setting("cf_token", ""))
-            valid, info = cloudflare.verify()
-            zones = ", ".join(z["name"] for z in cloudflare.zones()) if valid else ""
-            state = ('<span class="pill run"><span class="dot"></span>verknüpft</span>' if valid
-                     else f'<span class="pill err"><span class="dot"></span>{ui.esc(info)}</span>')
-            zones_html = (f'<p class="help">Domains: <span class="mono">{ui.esc(zones)}</span></p>'
-                          if zones else "")
-            return f"""<div class="between">
-<div>{state} &nbsp; <span class="muted">Konto:</span>
-<span class="mono">{ui.esc(store.get_setting('cf_account', '—'))}</span>{zones_html}</div>
+        accounts = store.cf_accounts()
+        connect = ui.open_button("cfDialog", "＋ DNS-Konto verbinden",
+                                 "btn primary" if not accounts else "btn")
+        if accounts:
+            rows = ""
+            for acc in accounts:
+                cloudflare = integrations.Cloudflare(acc["token"])
+                valid, info = cloudflare.verify()
+                zones = ", ".join(z["name"] for z in cloudflare.zones()) if valid else ""
+                state = ('<span class="pill run"><span class="dot"></span>verknüpft</span>' if valid
+                         else f'<span class="pill err"><span class="dot"></span>{ui.esc(info)}</span>')
+                zones_html = (f'<p class="help" style="margin:4px 0 0">Domains: '
+                              f'<span class="mono">{ui.esc(zones)}</span></p>' if zones else "")
+                rows += f"""<div class="between acctrow">
+<div>{state} &nbsp;<span class="mono">{ui.esc(acc['label'])}</span>{zones_html}</div>
 <form method="post" action="/network">{ui.csrf_input(self.csrf)}
 <input type="hidden" name="action" value="cf_unlink">
-<button class="btn danger" type="submit"
- onclick="return confirm('Verknüpfung wirklich lösen?')">Verknüpfung lösen</button></form></div>"""
+<input type="hidden" name="account_id" value="{ui.esc(acc['id'])}">
+<button class="btn sm danger" type="submit"
+ onclick="return confirm('Verknüpfung wirklich lösen?')">Lösen</button></form></div>"""
+            head = (f'<div class="between" style="margin-bottom:12px">'
+                    f'<span class="muted">Verbundene DNS-Konten</span>{connect}</div>{rows}')
+        else:
+            head = (f'<div class="between"><div><p class="help" style="margin:0">Noch kein DNS-Konto '
+                    f'verbunden. Danach legt weblab die Einträge je App automatisch an.</p></div>'
+                    f'{connect}</div>')
+        return head + self._cf_dialog()
+
+    def _cf_dialog(self):
+        domain = store.get_setting("manage_domain", "")
         client_id = store.get_setting("cf_client_id", "")
         redirect_uri = (f"https://{domain}/network/cloudflare/callback" if domain
                         else "https://<deine-domain>/network/cloudflare/callback")
-        return f"""<p class="help" style="margin-bottom:14px">Konto verknüpfen — DNS-Einträge
-werden danach je App automatisch angelegt. Zwei Wege:</p>
-<div class="grid g2">
+        inner = f"""<div class="grid g2">
 <div>
 <h3>1 · Mit Cloudflare anmelden</h3>
 <p class="help" style="margin-bottom:10px">Voraussetzung: ein OAuth-Client im Cloudflare-Konto
@@ -924,36 +976,42 @@ Daraus entsteht ein Token nur für DNS, gültig ein Jahr. Der Schlüssel wird ni
 <div class="field"><label for="cf_key">Konto-Schlüssel (Global API Key)</label>
  <input id="cf_key" name="cf_key" type="password" required autocomplete="off">
  <p class="help">Cloudflare → Mein Profil → API-Tokens → Global API Key → View.</p></div>
-<button class="btn" type="submit">Konto verknüpfen</button></form></div>
+<button class="btn" type="submit">Konto verbinden</button></form></div>
 </div>"""
+        return ui.modal("cfDialog", "DNS-Konto verbinden", inner)
 
     def _dns_records_html(self):
-        domain = store.get_setting("manage_domain", "")
-        token = store.get_setting("cf_token", "")
+        accounts = store.cf_accounts()
         server_ip = store.get_setting("server_ip", "")
-        if not (token and domain):
+        zones = integrations.all_zones(accounts) if accounts else []
+        if not zones:
             return ""
-        rows, error = integrations.Cloudflare(token).list_records(domain)
-        rr = ""
-        for record in rows:
-            mark = (" <span class='pill run'>dieser Server</span>"
-                    if record.get("content") == server_ip else "")
-            rr += (f"<tr><td class='mono'>{ui.esc(record.get('type'))}</td>"
-                   f"<td class='mono'>{ui.esc(record.get('name'))}</td>"
-                   f"<td class='mono'>{ui.esc(record.get('content'))}{mark}</td>"
-                   f"<td>{'Proxy' if record.get('proxied') else 'DNS only'}</td>"
-                   f"<td><form method='post' action='/network' style='display:inline'>"
-                   f"{ui.csrf_input(self.csrf)}<input type='hidden' name='action' value='dns_delete'>"
-                   f"<input type='hidden' name='record_id' value=\"{ui.esc(record.get('id'))}\">"
-                   f"<button class='btn sm danger' type='submit'"
-                   f" onclick=\"return confirm('Eintrag löschen?')\">Löschen</button></form></td></tr>")
-        if not rr:
-            rr = f"<tr><td colspan='5' class='muted'>{ui.esc(error or 'Keine Einträge.')}</td></tr>"
-        return (f"<h3 style='margin-top:18px'>Einträge · <span class='mono'>{ui.esc(domain)}</span></h3>"
-                f"<div class='tbl-wrap'><table>"
-                f"<tr><th>Typ</th><th>Name</th><th>Ziel</th><th>Modus</th><th></th></tr>"
-                f"{rr}</table></div>"
-                f"<p class='help'>Einträge je App (A, MX, SPF …) werden automatisch angelegt.</p>")
+        sections = ""
+        for zone in zones:
+            rows, error = integrations.Cloudflare(zone["token"]).list_records(zone["name"])
+            rr = ""
+            for record in rows:
+                mark = (" <span class='pill run'>dieser Server</span>"
+                        if record.get("content") == server_ip else "")
+                rr += (f"<tr><td class='mono'>{ui.esc(record.get('type'))}</td>"
+                       f"<td class='mono'>{ui.esc(record.get('name'))}</td>"
+                       f"<td class='mono'>{ui.esc(record.get('content'))}{mark}</td>"
+                       f"<td>{'Proxy' if record.get('proxied') else 'DNS only'}</td>"
+                       f"<td><form method='post' action='/network' style='display:inline'>"
+                       f"{ui.csrf_input(self.csrf)}<input type='hidden' name='action' value='dns_delete'>"
+                       f"<input type='hidden' name='zone' value=\"{ui.esc(zone['name'])}\">"
+                       f"<input type='hidden' name='record_id' value=\"{ui.esc(record.get('id'))}\">"
+                       f"<button class='btn sm danger' type='submit'"
+                       f" onclick=\"return confirm('Eintrag löschen?')\">Löschen</button></form></td></tr>")
+            if not rr:
+                rr = f"<tr><td colspan='5' class='muted'>{ui.esc(error or 'Keine Einträge.')}</td></tr>"
+            label = f" <span class='muted'>· {ui.esc(zone['account'])}</span>" if zone.get("account") else ""
+            sections += (f"<h3 style='margin-top:18px'><span class='mono'>{ui.esc(zone['name'])}</span>{label}</h3>"
+                         f"<div class='tbl-wrap'><table>"
+                         f"<tr><th>Typ</th><th>Name</th><th>Ziel</th><th>Modus</th><th></th></tr>"
+                         f"{rr}</table></div>")
+        return (sections
+                + "<p class='help'>Einträge je App (A, MX, SPF …) werden automatisch angelegt.</p>")
 
     def page_network(self):
         adv = self._query().get("advanced") == "1"
@@ -1066,27 +1124,29 @@ Daraus entsteht ein Token nur für DNS, gültig ein Jahr. Der Schlüssel wird ni
                 dockerctl.remove_network(form.get("name", ""))
                 return self._redirect("/network?advanced=1", ("ok", "Subnetz gelöscht."))
             if action == "dns_delete":
-                domain = store.get_setting("manage_domain", "")
-                cloudflare = integrations.Cloudflare(store.get_setting("cf_token", ""))
-                ok, err = cloudflare.delete_record(domain, form.get("record_id", ""))
+                zone = form.get("zone", "") or store.get_setting("manage_domain", "")
+                token = integrations.token_for_host(store.cf_accounts(), zone)
+                if not token:
+                    return self._redirect("/network", ("err", "Kein Konto für diese Domain."))
+                ok, err = integrations.Cloudflare(token).delete_record(zone, form.get("record_id", ""))
                 return self._redirect("/network", ("ok", "Eintrag gelöscht.") if ok
                                       else ("err", err or "Fehler"))
             if action == "cf_oauth":
                 return self._cf_oauth_start(form)
             if action == "cf_link":
+                email = form.get("cf_email", "").strip()
                 token, err = integrations.link_account(
-                    form.get("cf_email", ""), form.get("cf_key", ""),
+                    email, form.get("cf_key", ""),
                     label=store.get_setting("manage_domain", "weblab"))
                 if not token:
                     return self._redirect("/network", ("err", f"Verknüpfung fehlgeschlagen: {err}"))
-                store.set_setting("cf_token", token)
-                store.set_setting("cf_account", form.get("cf_email", "").strip())
+                store.add_cf_account(email or "Cloudflare", token)
                 store.set_setting("cf_status", "verknüpft")
-                return self._redirect("/network", ("ok", "Cloudflare-Konto verknüpft."))
+                return self._redirect("/network", ("ok", "DNS-Konto verbunden."))
             if action == "cf_unlink":
-                for key in ("cf_token", "cf_account"):
-                    store.set_setting(key, "")
-                store.set_setting("cf_status", "nicht verknüpft")
+                store.remove_cf_account(form.get("account_id", ""))
+                if not store.cf_accounts():
+                    store.set_setting("cf_status", "nicht verknüpft")
                 return self._redirect("/network", ("ok", "Verknüpfung gelöst."))
         except Exception as exc:  # noqa: BLE001
             return self._redirect("/network", ("err", str(exc)))
@@ -1296,10 +1356,9 @@ Daraus entsteht ein Token nur für DNS, gültig ein Jahr. Der Schlüssel wird ni
         CF_LOGIN.update({"state": "", "verifier": "", "client_secret": ""})
         if not token:
             return self._redirect("/network", ("err", f"Anmeldung fehlgeschlagen: {err}"))
-        store.set_setting("cf_token", token)
-        store.set_setting("cf_account", "über Cloudflare-Anmeldung")
+        store.add_cf_account("Cloudflare-Anmeldung", token)
         store.set_setting("cf_status", "verknüpft")
-        return self._redirect("/network", ("ok", "Cloudflare-Konto verknüpft."))
+        return self._redirect("/network", ("ok", "DNS-Konto verbunden."))
 
     # Dateien einer App
     def _app_base(self, app):

@@ -369,3 +369,33 @@ def exchange_code(client_id, client_secret, redirect_uri, code, verifier):
         return resp["access_token"], None
     return None, (resp.get("error_description") or resp.get("error")
                   or "Anmeldung fehlgeschlagen.")
+
+
+# --------------------------------------------------------------------------
+# Mehrere Cloudflare-Konten: Zonen aggregieren, Konto je Zone finden
+# --------------------------------------------------------------------------
+def all_zones(accounts):
+    """Zonen aller Konten: [{name, token, account_label, proxied_default}]."""
+    seen, result = set(), []
+    for acc in accounts or []:
+        token = acc.get("token")
+        if not token:
+            continue
+        for zone in Cloudflare(token).zones():
+            name = zone.get("name")
+            if name and name not in seen:
+                seen.add(name)
+                result.append({"name": name, "token": token,
+                               "account": acc.get("label", "")})
+    result.sort(key=lambda z: z["name"])
+    return result
+
+
+def token_for_host(accounts, hostname):
+    """Token des Kontos, dessen Zone am besten zu hostname passt (längste Übereinstimmung)."""
+    best, best_len = None, -1
+    for zone in all_zones(accounts):
+        z = zone["name"]
+        if (hostname == z or hostname.endswith("." + z)) and len(z) > best_len:
+            best, best_len = zone["token"], len(z)
+    return best
