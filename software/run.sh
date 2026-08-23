@@ -12,9 +12,9 @@ DOMAIN="${DOMAIN:-}"; CF_TOKEN="${CF_TOKEN:-}"
 DATA_MOUNT="${DATA_MOUNT:-/mnt/data}"; DATA_DEVICE="${DATA_DEVICE:-}"; ADMIN_SSH_PUBKEY="${ADMIN_SSH_PUBKEY:-}"
 ALLOW_ROOT_LOGIN="${ALLOW_ROOT_LOGIN:-true}"; ADMIN_USER="${ADMIN_USER:-}"; ADMIN_PASSWORD="${ADMIN_PASSWORD:-}"
 
-if [ -z "$DOMAIN" ]; then read -rp "Manage-Domain (z.B. example.com): " DOMAIN; fi
-[ -n "$DOMAIN" ] || { echo "DOMAIN ist nötig."; exit 1; }
-if [ -z "$CF_TOKEN" ]; then
+if [ -z "$DOMAIN" ] && [ -t 0 ]; then read -rp "Manage-Domain (z.B. example.com): " DOMAIN; fi
+[ -n "$DOMAIN" ] || { echo "DOMAIN ist nötig (in box.env eintragen oder als ENV setzen)."; exit 1; }
+if [ -z "$CF_TOKEN" ] && [ -t 0 ]; then
   read -rsp "Cloudflare API-Token (Enter = überspringen, DNS dann manuell): " CF_TOKEN; echo
 fi
 
