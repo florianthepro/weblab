@@ -28,9 +28,9 @@ SESSION_MAX_AGE = 12 * 3600
 # Fortschritt des Setup-Assistenten (Ladebalken)
 SETUP_STATE = {"running": False, "percent": 0, "step": "", "done": False, "error": None}
 
-# Laufende Cloudflare-Anmeldung per Geräte-Code
-CF_LOGIN = {"active": False, "user_code": "", "url": "", "device_code": "",
-            "client_id": "", "status": "", "done": False}
+# Laufende Cloudflare-Anmeldung (OAuth): Zufallswerte des aktuellen Vorgangs
+CF_LOGIN = {"state": "", "verifier": "", "client_id": "", "client_secret": "",
+            "redirect_uri": ""}
 
 
 # --------------------------------------------------------------------------
@@ -282,10 +282,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.page_users()
         if path == "/settings":
             return self.page_settings()
-        if path == "/settings/cloudflare":
-            return self.page_cf_login()
-        if path == "/api/cloudflare/status":
-            return self._json(self.cf_login_status())
+        if path == "/settings/cloudflare/callback":
+            return self.cf_callback()
         return self._send(ui.page("Nicht gefunden", "<h1>404</h1><p class='sub'>Seite gibt es nicht.</p>",
                                   user=(self.session or {}).get("user")), 404)
 
@@ -1189,23 +1187,29 @@ danach automatisch neu gestartet.</p>
  onclick="return confirm('Verknüpfung wirklich lösen?')">Verknüpfung lösen</button></form>"""
         else:
             client_id = store.get_setting("cf_client_id", "")
+            redirect_uri = (f"https://{domain}/settings/cloudflare/callback" if domain
+                            else "https://<deine-domain>/settings/cloudflare/callback")
             cf_block = f"""<p class="help" style="margin-bottom:14px">Verknüpfe dein Cloudflare-Konto,
 damit weblab alle DNS-Einträge automatisch anlegt. Du musst <b>keinen Token selbst erstellen</b> —
 weblab besorgt sich den Zugang. Zwei Wege:</p>
 <div class="grid g2">
 <div class="card" style="box-shadow:none">
-<h3>1 · Mit Cloudflare anmelden <span class="pill">empfohlen</span></h3>
-<p class="help" style="margin-bottom:10px">weblab zeigt dir einen Code, du bestätigst ihn bei
-Cloudflare — ganz ohne Passwort oder Schlüssel im Panel. Einmalig nötig: eine OAuth-Client-ID
-(Cloudflare → Konto verwalten → OAuth clients → Create client, Geräte-Anmeldung erlauben).</p>
+<h3>1 · Mit Cloudflare anmelden</h3>
+<p class="help" style="margin-bottom:10px">Du wirst zu Cloudflare geleitet, meldest dich dort
+an und bestätigst den Zugriff — im Panel wird kein Passwort und kein Schlüssel eingegeben.
+Einmalig nötig: ein OAuth-Client in deinem Cloudflare-Konto
+(Konto verwalten → OAuth clients → Create client) mit dieser Rückleitung:</p>
+<p class="help mono" style="word-break:break-all;margin-bottom:10px">{ui.esc(redirect_uri)}</p>
 <form method="post" action="/settings">{ui.csrf_input(self.csrf)}
-<input type="hidden" name="action" value="cf_device">
-<div class="field"><label for="cf_client_id">OAuth-Client-ID</label>
+<input type="hidden" name="action" value="cf_oauth">
+<div class="field"><label for="cf_client_id">Client-ID</label>
  <input id="cf_client_id" name="cf_client_id" value="{ui.esc(client_id)}"
   placeholder="00000000-0000-0000-0000-000000000000" required></div>
+<div class="field"><label for="cf_client_secret">Client-Secret <span class="muted">(falls vergeben)</span></label>
+ <input id="cf_client_secret" name="cf_client_secret" type="password" autocomplete="off"></div>
 <button class="btn primary" type="submit">Mit Cloudflare anmelden</button></form></div>
 <div class="card" style="box-shadow:none">
-<h3>2 · Konto-Anmeldung (ohne Vorbereitung)</h3>
+<h3>2 · Konto-Anmeldung <span class="pill">ohne Vorbereitung</span></h3>
 <p class="help" style="margin-bottom:10px">Einmalige Anmeldung mit Konto-E-Mail und
 Konto-Schlüssel. weblab erzeugt daraus selbst einen Token, der <b>nur DNS</b> darf. Der
 Schlüssel wird <b>nicht gespeichert</b>.</p>
@@ -1254,20 +1258,23 @@ Schlüssel wird <b>nicht gespeichert</b>.</p>
 
     def do_settings(self, form):
         action = form.get("action")
-        if action == "cf_device":
+        if action == "cf_oauth":
             client_id = (form.get("cf_client_id") or
                          store.get_setting("cf_client_id", "")).strip()
+            client_secret = (form.get("cf_client_secret") or "").strip()
             if not client_id:
-                return self._redirect("/settings", ("err", "Bitte zuerst eine OAuth-Client-ID "
-                                                           "aus deinem Cloudflare-Konto eintragen."))
+                return self._redirect("/settings", ("err", "Bitte die OAuth-Client-ID eintragen."))
             store.set_setting("cf_client_id", client_id)
-            info, err = integrations.device_start(client_id)
-            if not info:
-                return self._redirect("/settings", ("err", f"Anmeldung nicht möglich: {err}"))
-            CF_LOGIN.update({"active": True, "done": False, "client_id": client_id,
-                             "device_code": info["device_code"], "user_code": info["user_code"],
-                             "url": info["verification_uri"], "status": "pending"})
-            return self._redirect("/settings/cloudflare")
+            domain = store.get_setting("manage_domain", "")
+            if not domain:
+                return self._redirect("/settings", ("err", "Bitte zuerst die Verwaltungs-Domain setzen."))
+            redirect_uri = f"https://{domain}/settings/cloudflare/callback"
+            verifier, challenge = integrations.pkce_pair()
+            state = secrets.token_urlsafe(24)
+            CF_LOGIN.update({"state": state, "verifier": verifier, "client_id": client_id,
+                             "client_secret": client_secret, "redirect_uri": redirect_uri})
+            url = integrations.authorize_url(client_id, redirect_uri, state, challenge)
+            return self._send("", 303, "text/plain", {"Location": url})
         if action == "cf_link":
             token, err = integrations.link_account(
                 form.get("cf_email", ""), form.get("cf_key", ""),
@@ -1300,58 +1307,25 @@ Schlüssel wird <b>nicht gespeichert</b>.</p>
 
 
     # ==================================================================
-    # Cloudflare-Anmeldung per Geräte-Code
+    # Cloudflare-Anmeldung (OAuth-Rückleitung)
     # ==================================================================
-    def page_cf_login(self):
-        if not CF_LOGIN.get("active"):
-            return self._redirect("/settings", ("err", "Keine Anmeldung gestartet."))
-        body = f"""<a href="/settings" class="muted">← Einstellungen</a>
-<h1>Bei Cloudflare anmelden</h1>
-<p class="sub">Melde dich in einem neuen Tab bei Cloudflare an und bestätige den Zugriff.
-weblab holt sich den Zugang danach automatisch.</p>
-<div class="card">
-<p>Dein Anmeldecode:</p>
-<div class="v mono" style="font-size:34px;letter-spacing:4px;font-weight:700;margin:10px 0">
-{ui.esc(CF_LOGIN['user_code'])}</div>
-<p><a class="btn primary" href="{ui.esc(CF_LOGIN['url'])}" target="_blank" rel="noopener">
-Cloudflare öffnen und bestätigen</a></p>
-<div class="progress"><i id="bar" style="width:12%"></i></div>
-<p class="help" id="state">Warte auf Bestätigung …</p>
-</div>
-<script>
-(function(){{
- var n=0;
- function tick(){{
-  fetch('/api/cloudflare/status').then(function(r){{return r.json()}}).then(function(s){{
-   n=Math.min(92,n+4); document.getElementById('bar').style.width=n+'%';
-   if(s.done){{document.getElementById('bar').style.width='100%';
-     document.getElementById('state').textContent='Verknüpft — weiter …';
-     setTimeout(function(){{location.href='/settings'}},800); return;}}
-   if(s.error){{document.getElementById('state').innerHTML=
-     '<span style="color:var(--bad)">'+s.error+'</span>'; return;}}
-   setTimeout(tick,4000);
-  }}).catch(function(){{setTimeout(tick,5000)}});
- }} setTimeout(tick,3000);}})();
-</script>"""
-        self._render("Cloudflare-Anmeldung", body, "/settings")
-
-    def cf_login_status(self):
-        """Wird von der Anmeldeseite regelmäßig abgefragt."""
-        if not CF_LOGIN.get("active"):
-            return {"done": False, "error": "Keine Anmeldung aktiv."}
-        if CF_LOGIN.get("done"):
-            return {"done": True}
-        token, status = integrations.device_poll(CF_LOGIN["client_id"], CF_LOGIN["device_code"])
-        if status == "ok" and token:
-            store.set_setting("cf_token", token)
-            store.set_setting("cf_account", "über Cloudflare-Anmeldung")
-            store.set_setting("cf_status", "verknüpft")
-            CF_LOGIN.update({"done": True, "active": False})
-            return {"done": True}
-        if status == "pending":
-            return {"done": False}
-        CF_LOGIN["active"] = False
-        return {"done": False, "error": status}
+    def cf_callback(self):
+        query = self._query()
+        if query.get("error"):
+            return self._redirect("/settings",
+                                  ("err", f"Cloudflare: {query.get('error_description') or query['error']}"))
+        if not CF_LOGIN.get("state") or query.get("state") != CF_LOGIN["state"]:
+            return self._redirect("/settings", ("err", "Anmeldung abgelaufen — bitte erneut starten."))
+        token, err = integrations.exchange_code(
+            CF_LOGIN["client_id"], CF_LOGIN["client_secret"], CF_LOGIN["redirect_uri"],
+            query.get("code", ""), CF_LOGIN["verifier"])
+        CF_LOGIN.update({"state": "", "verifier": "", "client_secret": ""})
+        if not token:
+            return self._redirect("/settings", ("err", f"Anmeldung fehlgeschlagen: {err}"))
+        store.set_setting("cf_token", token)
+        store.set_setting("cf_account", "über Cloudflare-Anmeldung")
+        store.set_setting("cf_status", "verknüpft")
+        return self._redirect("/settings", ("ok", "Cloudflare-Konto verknüpft."))
 
     # ==================================================================
     # Dateien einer App (eigenes Dateisystem je Webseite)

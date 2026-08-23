@@ -1,7 +1,10 @@
 """Externe Integrationen: Reverse-Proxy (Caddy), DNS (Cloudflare), Plugin-Quellen."""
+import base64
+import hashlib
 import json
 import os
 import subprocess
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -277,6 +280,13 @@ def permission_group_ids(email, global_key):
     return found, (resp.get("errors") or [])
 
 
+def _first_account_id(email, global_key):
+    """Konto-ID ermitteln, um den Token auf dieses Konto zu begrenzen."""
+    resp = http_json(f"{CF_API}/accounts?per_page=5", headers=_account_headers(email, global_key))
+    results = resp.get("result") or []
+    return results[0].get("id") if results else None
+
+
 def link_account(email, global_key, label="weblab"):
     """Erzeugt einen auf DNS beschränkten Token. Rückgabe: (token, fehler)."""
     email = (email or "").strip()
@@ -288,13 +298,21 @@ def link_account(email, global_key, label="weblab"):
     if errors and not groups:
         return None, errors[0].get("message", "Anmeldung fehlgeschlagen.")
 
+    permissions = [{"id": groups[name]} for name in DNS_PERMISSIONS]
+    account_id = _first_account_id(email, global_key)
+    if account_id:
+        # Nur die Zonen DIESES Kontos — nicht alle Konten des Nutzers.
+        resources = {f"com.cloudflare.api.account.{account_id}":
+                     {"com.cloudflare.api.account.zone.*": "*"}}
+    else:
+        resources = {"com.cloudflare.api.account.zone.*": "*"}
+    expires = time.strftime("%Y-%m-%dT%H:%M:%SZ",
+                            time.gmtime(time.time() + 365 * 24 * 3600))
     payload = {
         "name": f"{label}-dns"[:32],
-        "policies": [{
-            "effect": "allow",
-            "resources": {"com.cloudflare.api.account.zone.*": "*"},
-            "permission_groups": [{"id": groups[name]} for name in DNS_PERMISSIONS],
-        }],
+        "policies": [{"effect": "allow", "resources": resources,
+                      "permission_groups": permissions}],
+        "expires_on": expires,
     }
     resp = http_json(f"{CF_API}/user/tokens", method="POST",
                      headers=_account_headers(email, global_key), data=payload)
@@ -312,15 +330,13 @@ def link_account(email, global_key, label="weblab"):
 
 
 # --------------------------------------------------------------------------
-# Cloudflare-Anmeldung per Geräte-Code (OAuth Device Flow)
+# Cloudflare-Anmeldung per OAuth (Authorization Code + PKCE)
 # --------------------------------------------------------------------------
-# Bequemster Weg: weblab zeigt einen kurzen Code, du meldest dich bei Cloudflare
-# an und bestätigst — weblab holt sich den Zugang danach selbst ab. Es wird kein
-# Kontopasswort und kein Konto-Schlüssel eingegeben.
-# Voraussetzung: eine OAuth-Client-ID (einmalig im Cloudflare-Konto anlegen).
-CF_DEVICE_AUTH = "https://dash.cloudflare.com/oauth2/device/auth"
+# Cloudflare unterstützt für eigene (Dritt-)Anwendungen den Authorization-Code-Flow.
+# Der Betreiber legt einmalig im eigenen Cloudflare-Konto einen OAuth-Client an und
+# hinterlegt als Rückleitung: https://<verwaltungs-domain>/settings/cloudflare/callback
+CF_AUTHORIZE = "https://dash.cloudflare.com/oauth2/auth"
 CF_TOKEN_URL = "https://dash.cloudflare.com/oauth2/token"
-CF_DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code"
 CF_SCOPES = "dns_records:read dns_records:edit zone:read offline_access"
 
 
@@ -343,34 +359,32 @@ def http_form(url, data, timeout=25):
         return {"error": str(exc)}
 
 
-def device_start(client_id, scopes=CF_SCOPES):
-    """Anmeldung starten. Rückgabe: (info, fehler) mit user_code/verification_uri."""
-    resp = http_form(CF_DEVICE_AUTH, {"client_id": client_id, "scope": scopes})
-    if resp.get("device_code"):
-        return {
-            "device_code": resp["device_code"],
-            "user_code": resp.get("user_code", ""),
-            "verification_uri": resp.get("verification_uri_complete")
-            or resp.get("verification_uri", "https://dash.cloudflare.com"),
-            "interval": int(resp.get("interval", 5)),
-            "expires_in": int(resp.get("expires_in", 900)),
-        }, None
-    return None, resp.get("error_description") or resp.get("error") or "Anmeldung nicht möglich."
+def pkce_pair():
+    """Zufallsgeheimnis + zugehörige Prüfsumme (S256) für den OAuth-Ablauf."""
+    verifier = base64.urlsafe_b64encode(os.urandom(48)).decode().rstrip("=")
+    challenge = base64.urlsafe_b64encode(
+        hashlib.sha256(verifier.encode()).digest()).decode().rstrip("=")
+    return verifier, challenge
 
 
-def device_poll(client_id, device_code):
-    """Einmal nachfragen, ob die Anmeldung bestätigt wurde.
-
-    Rückgabe: (token, status) — status ist 'pending', 'ok' oder eine Fehlermeldung.
-    """
-    resp = http_form(CF_TOKEN_URL, {
-        "grant_type": CF_DEVICE_GRANT,
-        "device_code": device_code,
-        "client_id": client_id,
+def authorize_url(client_id, redirect_uri, state, challenge, scopes=CF_SCOPES):
+    params = urllib.parse.urlencode({
+        "response_type": "code", "client_id": client_id, "redirect_uri": redirect_uri,
+        "scope": scopes, "state": state,
+        "code_challenge": challenge, "code_challenge_method": "S256",
     })
+    return f"{CF_AUTHORIZE}?{params}"
+
+
+def exchange_code(client_id, client_secret, redirect_uri, code, verifier):
+    """Autorisierungscode gegen einen Zugang eintauschen. Rückgabe: (token, fehler)."""
+    data = {"grant_type": "authorization_code", "code": code,
+            "redirect_uri": redirect_uri, "client_id": client_id,
+            "code_verifier": verifier}
+    if client_secret:
+        data["client_secret"] = client_secret
+    resp = http_form(CF_TOKEN_URL, data)
     if resp.get("access_token"):
-        return resp["access_token"], "ok"
-    error = resp.get("error", "")
-    if error in ("authorization_pending", "slow_down"):
-        return None, "pending"
-    return None, (resp.get("error_description") or error or "Anmeldung fehlgeschlagen.")
+        return resp["access_token"], None
+    return None, (resp.get("error_description") or resp.get("error")
+                  or "Anmeldung fehlgeschlagen.")
