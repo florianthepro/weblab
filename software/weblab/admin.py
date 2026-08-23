@@ -6,6 +6,7 @@
   python3 admin.py apps                           Installierte Apps auflisten
   python3 admin.py catalog                        Katalog anzeigen
   python3 admin.py install ID NAME [K=V ...]      App aus dem Katalog installieren
+  python3 admin.py remove APP_ID [--daten]        App entfernen (optional mit Daten)
 """
 import sys
 
@@ -96,6 +97,19 @@ def install(connector_id, name, extra):
     return 0
 
 
+def remove(app_id, delete_data=False):
+    import apps as appsvc
+    store.init()
+    app = store.get_app(int(app_id))
+    if not app:
+        print(f"Keine App mit ID {app_id}.")
+        return 1
+    appsvc.remove(int(app_id), delete_data=delete_data)
+    print(f"entfernt: {app['name']} (id {app_id})"
+          + (" inklusive Daten" if delete_data else ""))
+    return 0
+
+
 def status():
     store.init()
     print(f"Setup abgeschlossen: {'ja' if store.is_setup_done() else 'nein'}")
@@ -125,6 +139,8 @@ def main(argv):
         return show_catalog()
     if command == "install" and len(argv) >= 4:
         return install(argv[2], argv[3], argv[4:])
+    if command == "remove" and len(argv) >= 3:
+        return remove(argv[2], "--daten" in argv)
     print(__doc__)
     return 2
 
