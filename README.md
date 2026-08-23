@@ -36,10 +36,24 @@ Es zeigt an, was gefunden wurde, und fragt einmal nach (`JA`). Für einen Lauf o
 |---|---|
 | **Dashboard** | Auslastung des Servers (CPU/RAM/Platte) + Verbrauch je App |
 | **Apps** | Katalog (installieren) und installierte Apps (verwalten) |
-| **Netzwerk** | DNS-Konto + Einträge, offene Ports (extern; erweiterbar auf intern/Subnetze) |
+| **Netzwerk** | DNS-Konto + Einträge, VPN (Tailscale + Mullvad/Proton), offene Ports |
 | **Speicher** | Laufwerke (physisch) mit Belegung je Disk und welche App wie viel belegt |
 | **Benutzer** | Konten für die Oberfläche |
-| **Einstellungen** | Domain, Server-IP, Katalog |
+| **Einstellungen** | Domain, Server-IP, Katalog, automatische Updates |
+
+## Automatische Updates
+weblab prüft regelmäßig das Repo und installiert neue Versionen selbst (systemd-Timer).
+Unter **Einstellungen** siehst du die Version, kannst manuell „Jetzt prüfen & aktualisieren"
+und die automatischen Updates ein-/ausschalten.
+
+## VPN je App
+Unter **Netzwerk → VPN**:
+- **Tailscale (privat):** Konto verbinden (Auth-Key); Apps mit Erreichbarkeit
+  **Tailscale (privat)** sind dann nur in deinem Tailscale-Netz erreichbar — ideal zum
+  Verwalten, ohne etwas öffentlich zu machen.
+- **Ausgehende Tunnel (Mullvad/Proton):** WireGuard-Zugang hinterlegen; je App unter
+  **Einstellungen → Basis → Ausgang über VPN** wählbar. Der ausgehende Verkehr dieser App
+  läuft dann durch den VPN (via gluetun).
 
 ## Apps
 

@@ -12,6 +12,7 @@ import dockerctl
 import integrations
 import store
 import sysinfo
+import vpn
 
 SLUG_RE = re.compile(r"[^a-z0-9-]+")
 
@@ -113,8 +114,13 @@ def fixed_ports(connector):
 
 
 def port_binding(exposure, host_port, container_port, protocol, connector=None):
-    """intern = nur 127.0.0.1, sonst auf allen Interfaces."""
-    host = "127.0.0.1" if exposure == "internal" else "0.0.0.0"
+    """intern = nur 127.0.0.1; tailscale = nur Tailnet-IP; sonst alle Interfaces."""
+    if exposure == "internal":
+        host = "127.0.0.1"
+    elif exposure == "tailscale":
+        host = vpn.ts_ip() or "127.0.0.1"   # ohne Tailnet-IP sicher intern binden
+    else:
+        host = "0.0.0.0"
     fixed = fixed_ports(connector or {})
     if fixed:
         # Host-Port == Container-Port, sonst stimmen MX-Einträge und Mailprogramme nicht.
@@ -244,6 +250,32 @@ def apply_firewall(app, connector=None):
                      "proto", proto, "comment", f"weblab {app['slug']}")
 
 
+def _run_app_container(app, connector):
+    """Container der App starten. Bei gesetztem egress_id läuft die App durch einen
+    gluetun-Ausgang (Mullvad/Proton); sonst normal am gewählten Netz."""
+    data_dir = host_data_path(app, app["data_path"])
+    if connector.get("data"):
+        os.makedirs(data_dir, exist_ok=True)
+    volumes = ([(data_dir, connector.get("data", {}).get("container_path", "/data"))]
+               if connector.get("data") else [])
+    ports = port_binding(app["exposure"], app["host_port"], app["container_port"],
+                         connector.get("protocol", "tcp"), connector)
+    hostname = container_hostname(connector, app["values"])
+    egress = store.vpn_egress_get(app.get("egress_id")) if app.get("egress_id") else None
+    if egress:
+        input_ports = [cp for (_bind, cp, _proto) in ports]
+        gluetun_name = vpn.egress_up(app["slug"], egress, ports, input_ports)
+        return dockerctl.run_container(
+            slug=app["slug"], image=connector["image"], env=env_for(connector, app["values"]),
+            volumes=volumes, cpu=app["cpu"], ram_mb=app["ram_mb"], hostname=hostname,
+            network_mode=f"container:{gluetun_name}")
+    vpn.egress_down(app["slug"])   # evtl. früheren Ausgang entfernen
+    return dockerctl.run_container(
+        slug=app["slug"], image=connector["image"], env=env_for(connector, app["values"]),
+        ports=ports, volumes=volumes, cpu=app["cpu"], ram_mb=app["ram_mb"],
+        network=app["network"], hostname=hostname)
+
+
 def install(connector_id, form):
     """Neue App aus dem Katalog installieren."""
     connector = catalog.get(connector_id)
@@ -294,6 +326,7 @@ def install(connector_id, form):
         "location": form.get("location") or "docker",
         "network": form.get("network") or "bridge",
         "data_path": data_root, "manage_host": manage_host,
+        "egress_id": (form.get("egress_id") or "").strip(),
         "cpu": float(form.get("cpu") or 1), "ram_mb": int(float(form.get("ram_mb") or 1024)),
         "values_json": _dumps(values),
     }
@@ -301,15 +334,7 @@ def install(connector_id, form):
     app["id"] = app_id
 
     dockerctl.pull(connector["image"])
-    dockerctl.run_container(
-        slug=slug, image=connector["image"], env=env_for(connector, values),
-        ports=port_binding(exposure, host_port, container_port,
-                           connector.get("protocol", "tcp"), connector),
-        volumes=[(data_dir, connector.get("data", {}).get("container_path", "/data"))]
-        if connector.get("data") else [],
-        cpu=app["cpu"], ram_mb=app["ram_mb"], network=app["network"],
-        hostname=container_hostname(connector, values),
-    )
+    _run_app_container(app, connector)
     # Der Container läuft bereits — Fehler hier werden gemeldet, nicht geworfen.
     app["warnings"] = []
     def dns_step():
@@ -448,6 +473,8 @@ def update(app_id, form, section="basic"):
             changes["location"] = form["location"]
         if "network" in form:
             changes["network"] = form["network"]
+        if "egress_id" in form:
+            changes["egress_id"] = (form.get("egress_id") or "").strip()
         if "data_path" in form and form["data_path"]:
             changes["data_path"] = form["data_path"]
         if form.get("cpu"):
@@ -468,17 +495,7 @@ def update(app_id, form, section="basic"):
 
     if section == "basic":
         # Port/Ressourcen/Netzwerk erfordern einen neuen Container.
-        data_dir = host_data_path(app, app["data_path"])
-        os.makedirs(data_dir, exist_ok=True)
-        dockerctl.run_container(
-            slug=app["slug"], image=connector["image"],
-            env=env_for(connector, app["values"]),
-            ports=port_binding(app["exposure"], app["host_port"], app["container_port"],
-                               connector.get("protocol", "tcp"), connector),
-            volumes=[(data_dir, connector.get("data", {}).get("container_path", "/data"))]
-            if connector.get("data") else [],
-            cpu=app["cpu"], ram_mb=app["ram_mb"], network=app["network"],
-        )
+        _run_app_container(app, connector)
         # Konfigdateien im Container gehen beim Neuerstellen verloren.
         write_init_files(app, connector, app["values"])
         apply_config_files(app, connector, app["values"])
@@ -490,16 +507,7 @@ def update(app_id, form, section="basic"):
         env_changed = any((f.get("target") or {}).get("kind") == "env"
                           for f in connector["fields"].get("specific", []))
         if env_changed:
-            data_dir = host_data_path(app, app["data_path"])
-            dockerctl.run_container(
-                slug=app["slug"], image=connector["image"],
-                env=env_for(connector, app["values"]),
-                ports=port_binding(app["exposure"], app["host_port"], app["container_port"],
-                                   connector.get("protocol", "tcp"), connector),
-                volumes=[(data_dir, connector.get("data", {}).get("container_path", "/data"))]
-                if connector.get("data") else [],
-                cpu=app["cpu"], ram_mb=app["ram_mb"], network=app["network"],
-            )
+            _run_app_container(app, connector)
             apply_config_files(app, connector, app["values"])
         else:
             applied = apply_file_lines(app, connector, app["values"])
@@ -513,6 +521,7 @@ def remove(app_id, delete_data=False):
     if not app:
         return
     dockerctl.remove(app["slug"], missing_ok=True)
+    vpn.egress_down(app["slug"])
     connector = catalog.get(app["connector_id"]) or {}
     for port, proto in app_ports(app, connector):
         _ufw("--force", "delete", "allow", f"{port}/{proto}")

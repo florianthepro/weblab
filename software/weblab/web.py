@@ -20,11 +20,13 @@ import integrations
 import store
 import sysinfo
 import ui
+import vpn
 
 HOST = os.environ.get("WEBLAB_BIND", "127.0.0.1")
 PORT = int(os.environ.get("WEBLAB_PORT", "8099"))
 COOKIE = "weblab_session"
-EXPOSURE_LABELS = {"external": "Extern", "internal": "Intern", "specific": "Spezifisch"}
+EXPOSURE_LABELS = {"external": "Extern", "internal": "Intern", "specific": "Spezifisch",
+                   "tailscale": "Tailscale (privat)"}
 LOCATION_LABELS = {"docker": "Docker", "device": "Gerät"}
 SESSION_MAX_AGE = 12 * 3600
 
@@ -597,6 +599,31 @@ class Handler(BaseHTTPRequestHandler):
                 f'<select data-domain-zone aria-label="Zone" style="flex:1">{zone_opts}</select></div>'
                 f'<input type="hidden" name="domain" data-domain-out value="{ui.esc(current)}"></div>')
 
+    def _exposure_field(self, current):
+        opts = ["external", "internal", "specific"]
+        labels = {"external": "Extern (öffentlich)", "internal": "Intern (nur Server)",
+                  "specific": "Spezifisch (nur erlaubte IPs)"}
+        if current == "tailscale" or vpn.ts_status().get("connected"):
+            opts.append("tailscale")
+            labels["tailscale"] = "Tailscale (privat)"
+        return ui.select_field(
+            "exposure", "Erreichbarkeit", opts, current,
+            "Intern = nur dieser Server. Spezifisch = nur erlaubte IPs. "
+            "Tailscale = nur im privaten VPN.", labels)
+
+    def _egress_field(self, current):
+        egresses = store.vpn_egress()
+        if not egresses and not current:
+            return ""  # nichts konfiguriert -> Feld weglassen
+        opts = [""] + [e["id"] for e in egresses]
+        labels = {"": "Kein (direkt)"}
+        for e in egresses:
+            labels[e["id"]] = f'{e["label"]} ({e["provider"]})'
+        return ui.select_field(
+            "egress_id", "Ausgang über VPN", opts, current,
+            "Leitet den ausgehenden Verkehr dieser App durch den gewählten VPN-Ausgang "
+            "(Mullvad/Proton).", labels)
+
     def page_catalog_detail(self, group_id):
         group = catalog.get_group(group_id)
         if not group:
@@ -649,13 +676,11 @@ class Handler(BaseHTTPRequestHandler):
    <input id="name" name="name" value="{ui.esc(group['name'])}" required></div>
   {self._domain_field('', f"app.{store.get_setting('manage_domain', 'example.com')}")}
   {manage_field}
-  {ui.select_field('exposure', 'Erreichbarkeit', ['external', 'internal', 'specific'], exposure_default,
-                   'Intern = nur dieser Server. Spezifisch = nur erlaubte IPs.',
-                   {'external': 'Extern (öffentlich)', 'internal': 'Intern (nur Server)',
-                    'specific': 'Spezifisch (nur erlaubte IPs)'})}
+  {self._exposure_field(exposure_default)}
   <div class="field" data-depends='{{"exposure":"specific"}}'>
    <label for="allow_cidr">Erlaubte IPs/CIDR</label>
    <input id="allow_cidr" name="allow_cidr" placeholder="203.0.113.5/32"></div>
+  {self._egress_field('')}
   <div class="field"><label for="host_port">Port (leer = automatisch)</label>
    <input id="host_port" name="host_port" type="number" min="1" max="65535"></div>
   {ui.select_field('location', 'Ablageort', ['docker', 'device'], 'docker', '',
@@ -833,13 +858,11 @@ bleiben erhalten. Rot umrandete Felder ändern den Aufbau grundlegend — erst f
   f'<input id="manage_host" name="manage_host" value="{ui.esc(app.get("manage_host",""))}"'
   f'{ui._info_attr("Dashboard + Dateimanager dieser App. Die Seite selbst läuft unter der Domain darüber.")}></div>')
   if connector.get('manage_subdomain') else ''}
-{ui.select_field('exposure', 'Erreichbarkeit', ['external', 'internal', 'specific'], app['exposure'],
-                 'Intern = nur dieser Server. Spezifisch = nur erlaubte IPs.',
-                 {'external': 'Extern (öffentlich)', 'internal': 'Intern (nur Server)',
-                  'specific': 'Spezifisch (nur erlaubte IPs)'})}
+{self._exposure_field(app['exposure'])}
 <div class="field" data-depends='{{"exposure":"specific"}}'>
  <label for="allow_cidr">Erlaubte IPs/CIDR</label>
  <input id="allow_cidr" name="allow_cidr" value="{ui.esc(app['allow_cidr'])}"></div>
+{self._egress_field(app.get('egress_id',''))}
 <div class="field"><label for="host_port">Port (extern)</label>
  <input id="host_port" name="host_port" type="number" value="{ui.esc(app['host_port'])}"></div>
 </div>
@@ -1033,6 +1056,61 @@ Daraus entsteht ein Token nur für DNS, gültig ein Jahr. Der Schlüssel wird ni
 </div>"""
         return ui.modal("cfDialog", "DNS-Konto verbinden", inner)
 
+    def _vpn_block(self):
+        st = vpn.ts_status()
+        if st.get("connected"):
+            ts_html = (f'<div class="between acctrow"><div>'
+                       f'<span class="pill run"><span class="dot"></span>verbunden</span> '
+                       f'<span class="mono">{ui.esc(st.get("hostname"))}</span>'
+                       f'<p class="help" style="margin:4px 0 0">Tailnet-IP: '
+                       f'<span class="mono">{ui.esc(st.get("ip"))}</span></p></div>'
+                       f'<form method="post" action="/network">{ui.csrf_input(self.csrf)}'
+                       f'<input type="hidden" name="action" value="ts_down">'
+                       f'<button class="btn sm danger" type="submit">Trennen</button></form></div>')
+        else:
+            ts_html = (f'<p class="help" style="margin:0 0 10px">Verbinden — danach sind Apps mit '
+                       f'Erreichbarkeit „Tailscale (privat)" nur in deinem Tailscale-Netz erreichbar.</p>'
+                       f'<form method="post" action="/network" class="row">{ui.csrf_input(self.csrf)}'
+                       f'<input type="hidden" name="action" value="ts_up">'
+                       f'<input name="authkey" placeholder="tskey-auth-…" required autocomplete="off" '
+                       f'style="flex:1;min-width:220px">'
+                       f'<button class="btn primary" type="submit">Verbinden</button></form>')
+        rows = ""
+        for e in store.vpn_egress():
+            rows += (f'<div class="between acctrow"><div><span class="mono">{ui.esc(e["label"])}</span>'
+                     f'<span class="muted"> · {ui.esc(e["provider"])}</span></div>'
+                     f'<form method="post" action="/network">{ui.csrf_input(self.csrf)}'
+                     f'<input type="hidden" name="action" value="egress_remove">'
+                     f'<input type="hidden" name="egress_id" value="{ui.esc(e["id"])}">'
+                     f'<button class="btn sm danger" type="submit" '
+                     f'onclick="return confirm(\'Ausgang entfernen?\')">Entfernen</button></form></div>')
+        add_btn = ui.open_button("vpnDialog", "＋ VPN-Ausgang hinzufügen", "btn")
+        egress_html = (
+            f'<div class="between" style="margin:16px 0 10px"><span class="muted">'
+            f'Ausgehende Tunnel (Mullvad/Proton)</span>{add_btn}</div>{rows}' if rows else
+            f'<div class="between" style="margin:16px 0 0"><p class="help" style="margin:0">'
+            f'Ausgehende Tunnel: den Verkehr einer App durch Mullvad/Proton leiten.</p>{add_btn}</div>')
+        return (f'<h3>Tailscale — privater Zugriff</h3>{ts_html}{egress_html}{self._vpn_dialog()}')
+
+    def _vpn_dialog(self):
+        inner = f"""<p class="help" style="margin-bottom:12px">WireGuard-Zugang von Mullvad oder
+ProtonVPN. Privaten Schlüssel und Adresse aus der heruntergeladenen WireGuard-Konfiguration
+übernehmen (der Schlüssel wird nur für diesen Ausgang gespeichert).</p>
+<form method="post" action="/network">{ui.csrf_input(self.csrf)}
+<input type="hidden" name="action" value="egress_add">
+<div class="field"><label for="e_label">Name</label>
+ <input id="e_label" name="label" placeholder="z. B. Mullvad Zürich" required></div>
+{ui.select_field('provider', 'Anbieter', ['mullvad', 'protonvpn'], 'mullvad', '',
+                 {'mullvad': 'Mullvad', 'protonvpn': 'ProtonVPN'})}
+<div class="field"><label for="e_key">WireGuard privater Schlüssel</label>
+ <input id="e_key" name="private_key" type="password" required autocomplete="off"></div>
+<div class="field"><label for="e_addr">Adresse(n)</label>
+ <input id="e_addr" name="addresses" placeholder="10.64.0.2/32" required autocomplete="off"></div>
+<div class="field"><label for="e_loc">Standort <span class="muted">optional</span></label>
+ <input id="e_loc" name="location" placeholder="z. B. Zurich"></div>
+<button class="btn primary" type="submit">Hinzufügen</button></form>"""
+        return ui.modal("vpnDialog", "VPN-Ausgang hinzufügen", inner)
+
     def _dns_records_html(self):
         accounts = store.cf_accounts()
         server_ip = store.get_setting("server_ip", "")
@@ -1155,6 +1233,8 @@ Daraus entsteht ein Token nur für DNS, gültig ein Jahr. Der Schlüssel wird ni
 <p class="sub">DNS-Konto, offene Ports und Verbindungen.</p>
 <h2>DNS</h2>
 <div class="card">{self._cloudflare_block()}{self._dns_records_html()}</div>
+<h2 style="margin-top:30px">VPN</h2>
+<div class="card">{self._vpn_block()}</div>
 <div class="between" style="margin:30px 0 11px">
 <h2 style="margin:0">Offene Ports (extern)</h2>{toggle}</div>
 <div class="card"><div class="tbl-wrap"><table>
@@ -1201,6 +1281,32 @@ Daraus entsteht ein Token nur für DNS, gültig ein Jahr. Der Schlüssel wird ni
                 if not store.cf_accounts():
                     store.set_setting("cf_status", "nicht verknüpft")
                 return self._redirect("/network", ("ok", "Verknüpfung gelöst."))
+            if action == "ts_up":
+                authkey = (form.get("authkey") or "").strip()
+                if not authkey:
+                    return self._redirect("/network", ("err", "Bitte einen Tailscale-Auth-Key eingeben."))
+                host = store.get_setting("manage_domain", "weblab").split(".")[0] or "weblab"
+                ok, err = vpn.ts_up(authkey, hostname=host)
+                if ok:
+                    # Tailnet-Schnittstelle in der Firewall zulassen (privater Zugriff).
+                    subprocess.run(["ufw", "allow", "in", "on", "tailscale0"],
+                                   capture_output=True, text=True, timeout=15)
+                    return self._redirect("/network", ("ok", "Tailscale verbunden."))
+                return self._redirect("/network", ("err", f"Tailscale: {err}"))
+            if action == "ts_down":
+                vpn.ts_down()
+                return self._redirect("/network", ("ok", "Tailscale getrennt."))
+            if action == "egress_add":
+                pk = (form.get("private_key") or "").strip()
+                addr = (form.get("addresses") or "").strip()
+                if not pk or not addr:
+                    return self._redirect("/network", ("err", "Schlüssel und Adresse sind nötig."))
+                store.add_vpn_egress(form.get("label", ""), form.get("provider", "mullvad"),
+                                     pk, addr, (form.get("location") or "").strip())
+                return self._redirect("/network", ("ok", "VPN-Ausgang hinzugefügt."))
+            if action == "egress_remove":
+                store.remove_vpn_egress(form.get("egress_id", ""))
+                return self._redirect("/network", ("ok", "VPN-Ausgang entfernt."))
         except Exception as exc:  # noqa: BLE001
             return self._redirect("/network", ("err", str(exc)))
         return self._redirect("/network")

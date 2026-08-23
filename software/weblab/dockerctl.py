@@ -76,24 +76,36 @@ def stats():
 
 
 def run_container(slug, image, env=None, ports=None, volumes=None, cpu=None,
-                  ram_mb=None, network=None, restart="unless-stopped", hostname=None):
-    """Container starten; ein bestehender gleichen Namens wird ersetzt."""
+                  ram_mb=None, network=None, restart="unless-stopped", hostname=None,
+                  cap_add=None, devices=None, network_mode=None):
+    """Container starten; ein bestehender gleichen Namens wird ersetzt.
+
+    network_mode: z. B. "container:weblab-vpn-x" — die App teilt sich das Netz eines
+    anderen Containers (VPN-Ausgang). Dann keine eigenen Ports/Netzwerke/Hostname.
+    """
     remove(slug, missing_ok=True)
     args = ["run", "-d", "--name", container_name(slug),
             "--label", f"{LABEL}={slug}", "--restart", restart]
-    if hostname:
+    if network_mode:
+        args += ["--network", network_mode]
+    elif hostname:
         args += ["--hostname", hostname]
+    for cap in cap_add or []:
+        args += ["--cap-add", cap]
+    for dev in devices or []:
+        args += ["--device", dev]
     for key, value in (env or {}).items():
         args += ["-e", f"{key}={value}"]
-    for bind, container_port, proto in (ports or []):
-        args += ["-p", f"{bind}:{container_port}/{proto}"]
+    if not network_mode:
+        for bind, container_port, proto in (ports or []):
+            args += ["-p", f"{bind}:{container_port}/{proto}"]
     for host_path, container_path in (volumes or []):
         args += ["-v", f"{host_path}:{container_path}"]
     if cpu:
         args += ["--cpus", str(cpu)]
     if ram_mb:
         args += ["--memory", f"{int(ram_mb)}m"]
-    if network and network != "bridge":
+    if network and network != "bridge" and not network_mode:
         args += ["--network", network]
     args.append(image)
     return _run(args, timeout=600).strip()

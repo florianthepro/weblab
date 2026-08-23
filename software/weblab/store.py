@@ -55,7 +55,8 @@ CREATE TABLE IF NOT EXISTS apps (
 """
 
 # Nachträglich ergänzte Spalten (Migration bestehender Datenbanken).
-_MIGRATIONS = {"apps": {"manage_host": "TEXT NOT NULL DEFAULT ''"}}
+_MIGRATIONS = {"apps": {"manage_host": "TEXT NOT NULL DEFAULT ''",
+                        "egress_id": "TEXT NOT NULL DEFAULT ''"}}
 
 
 def _migrate(conn):
@@ -163,7 +164,7 @@ def delete_user(user_id):
 # ---------- apps ----------
 APP_COLUMNS = (
     "slug name connector_id group_id version domain exposure allow_cidr host_port "
-    "container_port location network data_path cpu ram_mb manage_host values_json"
+    "container_port location network data_path cpu ram_mb manage_host egress_id values_json"
 ).split()
 
 
@@ -259,3 +260,33 @@ def remove_cf_account(acc_id):
 
 def cf_connected():
     return bool(cf_accounts())
+
+
+# ---------- VPN-Ausgänge (Mullvad/Proton, via WireGuard) ----------
+def vpn_egress():
+    """Liste ausgehender VPN-Tunnel: [{id,label,provider,private_key,addresses,location}]."""
+    raw = get_setting("vpn_egress", "")
+    if not raw:
+        return []
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        return []
+
+
+def add_vpn_egress(label, provider, private_key, addresses, location=""):
+    items = vpn_egress()
+    eid = hashlib.sha1(f"{provider}:{addresses}:{private_key}".encode()).hexdigest()[:8]
+    items = [x for x in items if x.get("id") != eid]
+    items.append({"id": eid, "label": label or provider, "provider": provider,
+                  "private_key": private_key, "addresses": addresses, "location": location})
+    set_setting("vpn_egress", json.dumps(items))
+    return eid
+
+
+def remove_vpn_egress(eid):
+    set_setting("vpn_egress", json.dumps([x for x in vpn_egress() if x.get("id") != eid]))
+
+
+def vpn_egress_get(eid):
+    return next((x for x in vpn_egress() if x.get("id") == eid), None)
