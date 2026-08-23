@@ -51,10 +51,17 @@ Minecraft (Java), Webseite (Apache + PHP), Webseite (Nginx), Mailserver, Postgre
 
 ## Cloudflare verknüpfen
 Unter **Einstellungen → Cloudflare-Konto** verknüpfst du dein Konto — **du musst keinen Token
-selbst anlegen**. Entweder per **Anmeldung bei Cloudflare** (weblab zeigt einen Code, du
-bestätigst ihn im Cloudflare-Konto) oder per einmaliger **Konto-Anmeldung**, aus der weblab
-selbst einen Token erzeugt, der nur DNS ändern darf. Danach legt weblab die DNS-Einträge
-jeder App automatisch an (Webseiten: A-Record; Mailserver: A, MX, SPF, DMARC).
+selbst anlegen**. Zwei Wege:
+
+1. **Mit Cloudflare anmelden** — du wirst zu Cloudflare geleitet und bestätigst dort den
+   Zugriff (OAuth, Authorization Code + PKCE). Dafür legst du einmalig einen OAuth-Client in
+   deinem Cloudflare-Konto an; die nötige Rückleitungs-Adresse zeigt weblab an.
+2. **Konto-Anmeldung** (ohne Vorbereitung) — einmalige Eingabe von Konto-E-Mail und
+   Konto-Schlüssel. weblab erzeugt daraus selbst einen Token, der **nur DNS** ändern darf und
+   nach einem Jahr abläuft; der Schlüssel wird **nicht gespeichert**.
+
+Danach legt weblab die DNS-Einträge jeder App automatisch an (Webseiten: A-Record;
+Mailserver: A, MX, SPF, DMARC).
 
 Details zum Connector-Format: [`connectors/README.md`](connectors/README.md).
 

@@ -22,7 +22,8 @@ aus (z. B. RAM bei einem Minecraft-Server) und die App läuft — sauber in Dock
 | Datenhaltung | **SQLite** | Eingebaut, robust, keine zusätzliche Datenbank nötig. |
 | App-Laufzeit | **Docker** | Standard, saubere Isolation je App, Ressourcenlimits (CPU/RAM). |
 | Proxy/TLS | **Caddy** | Automatisches HTTPS je Domain, minimale Konfiguration. |
-| DNS | **Cloudflare-API** | Einträge direkt aus der Oberfläche. |
+| DNS | **Cloudflare-API** | Konto verknüpfen (OAuth oder Konto-Anmeldung); Einträge entstehen automatisch. |
+| Dateien | **Dateimanager je App** | Jede Webseite hat ihr eigenes Dateisystem im Browser. |
 | Katalog | **Connector-Dateien (JSON)** | Der „Index“ zwischen Katalog, Formularen und Container. |
 
 ## Sicherheit
@@ -54,10 +55,16 @@ beginnt, z. B. `motd=` in `/data/server.properties`).
 **Erweitert:** `advanced.plugins` schaltet die Plugin-Verwaltung frei (Quelle wählen → suchen →
 hinzufügen; Gesamtliste mit Löschen). Für Minecraft: Modrinth und SpigotMC.
 
+## Mehrere Webseiten
+Apache und Nginx sind **beliebig oft** installierbar. Jede Installation ist eigenständig:
+eigener Container, eigener Port, **eigene Domain** und ein **eigenes Dateisystem**, das unter
+*App → Dateien* im Browser verwaltet wird (hochladen, bearbeiten, Ordner, löschen).
+Der Mailserver ist bewusst **einmalig** — seine Ports (25/143/465/587/993) stehen fest.
+
 ## Bereiche der Oberfläche
 - **Dashboard** — Auslastung des Geräts und Verbrauch je App (CPU/RAM/Netz), Status, Ports.
-- **Apps** — Katalog + installierte Apps; je App Übersicht, Einstellungen (Basis/Spezifisch/
-  Erweitert), Protokoll, Start/Stopp/Neustart/Entfernen.
+- **Apps** — Katalog + installierte Apps; je App Übersicht, **Dateien**, Einstellungen
+  (Basis/Spezifisch/Erweitert), Protokoll, Start/Stopp/Neustart/Entfernen.
 - **Netzwerk** — Schnittstellen, **Subnetze anlegen/löschen**, alle belegten Ports (intern/extern).
 - **DNS** — Einträge der Verwaltungs-Domain anlegen/ersetzen/löschen.
 - **Speicher** — Dateisysteme, Laufwerke, Datenpfade und Belegung je App.
