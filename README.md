@@ -21,11 +21,10 @@ unter **`https://deine-domain`**.
 |---|---|
 | **Dashboard** | Auslastung des Servers (CPU/RAM/Platte) + Verbrauch je App |
 | **Apps** | Katalog (installieren) und installierte Apps (verwalten) |
-| **Netzwerk** | Schnittstellen, **Subnetze anlegen/verwalten**, alle belegten Ports |
-| **DNS** | DNS-Einträge (Cloudflare-Konto verknüpfen → Einträge entstehen automatisch) |
+| **Netzwerk** | DNS-Konto + Einträge, offene Ports (extern; erweiterbar auf intern/Subnetze) |
 | **Speicher** | Laufwerke, Belegung, Datenpfade der Apps |
 | **Benutzer** | Konten für die Oberfläche |
-| **Einstellungen** | Domain, Cloudflare-Token, Katalog |
+| **Einstellungen** | Domain, Server-IP, Katalog |
 
 ## Apps
 
@@ -50,7 +49,7 @@ Unter **App → Einstellungen** gibt es drei Bereiche:
 Minecraft (Java), Webseite (Apache + PHP), Webseite (Nginx), Mailserver, PostgreSQL.
 
 ## Cloudflare verknüpfen
-Unter **Einstellungen → Cloudflare-Konto** verknüpfst du dein Konto — **du musst keinen Token
+Unter **Netzwerk → DNS** verknüpfst du dein Konto — **du musst keinen Token
 selbst anlegen**. Zwei Wege:
 
 1. **Mit Cloudflare anmelden** — du wirst zu Cloudflare geleitet und bestätigst dort den

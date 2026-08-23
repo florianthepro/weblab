@@ -22,7 +22,7 @@ aus (z. B. RAM bei einem Minecraft-Server) und die App läuft — sauber in Dock
 | Datenhaltung | **SQLite** | Eingebaut, robust, keine zusätzliche Datenbank nötig. |
 | App-Laufzeit | **Docker** | Standard, saubere Isolation je App, Ressourcenlimits (CPU/RAM). |
 | Proxy/TLS | **Caddy** | Automatisches HTTPS je Domain, minimale Konfiguration. |
-| DNS | **Cloudflare-API** | Konto verknüpfen (OAuth oder Konto-Anmeldung); Einträge entstehen automatisch. |
+| DNS | **Cloudflare-API** | Konto unter *Netzwerk* verknüpfen; Einträge je App automatisch. |
 | Dateien | **Dateimanager je App** | Jede Webseite hat ihr eigenes Dateisystem im Browser. |
 | Katalog | **Connector-Dateien (JSON)** | Der „Index“ zwischen Katalog, Formularen und Container. |
 
@@ -65,8 +65,8 @@ Der Mailserver ist **einmalig** — seine Ports (25/143/465/587/993) stehen fest
 - **Dashboard** — Auslastung des Geräts und Verbrauch je App (CPU/RAM/Netz), Status, Ports.
 - **Apps** — Katalog + installierte Apps; je App Übersicht, **Dateien**, Einstellungen
   (Basis/Spezifisch/Erweitert), Protokoll, Start/Stopp/Neustart/Entfernen.
-- **Netzwerk** — Schnittstellen, **Subnetze anlegen/löschen**, alle belegten Ports (intern/extern).
-- **DNS** — Einträge der Verwaltungs-Domain anlegen/ersetzen/löschen.
+- **Netzwerk** — DNS-Konto verknüpfen + Übersicht aller Einträge; offene Ports (standardmäßig
+  extern, per „Erweitert“ auch intern, Schnittstellen und Subnetze).
 - **Speicher** — Dateisysteme, Laufwerke, Datenpfade und Belegung je App.
 - **Benutzer** — Konten anlegen/löschen, eigenes Passwort ändern.
 - **Einstellungen** — Domain, Server-IP, Cloudflare-Konto, Katalog, Status.

@@ -6,7 +6,6 @@ TABS = [
     ("/", "Dashboard", "◧"),
     ("/apps", "Apps", "▦"),
     ("/network", "Netzwerk", "⇄"),
-    ("/dns", "DNS", "◎"),
     ("/storage", "Speicher", "▤"),
     ("/users", "Benutzer", "◉"),
     ("/settings", "Einstellungen", "⚙"),

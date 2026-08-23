@@ -267,15 +267,13 @@ class Handler(BaseHTTPRequestHandler):
             return self.page_app_edit(int(match.group(1)))
         if path == "/network":
             return self.page_network()
-        if path == "/dns":
-            return self.page_dns()
         if path == "/storage":
             return self.page_storage()
         if path == "/users":
             return self.page_users()
         if path == "/settings":
             return self.page_settings()
-        if path == "/settings/cloudflare/callback":
+        if path == "/network/cloudflare/callback":
             return self.cf_callback()
         return self._send(ui.page("Nicht gefunden", "<h1>404</h1><p class='sub'>Seite gibt es nicht.</p>",
                                   user=(self.session or {}).get("user")), 404)
@@ -316,8 +314,6 @@ class Handler(BaseHTTPRequestHandler):
             return self.do_files(int(match.group(1)), form)
         if path == "/network":
             return self.do_network(form)
-        if path == "/dns":
-            return self.do_dns(form)
         if path == "/users":
             return self.do_users(form)
         if path == "/settings":
@@ -881,54 +877,159 @@ Container neu; die Daten bleiben erhalten.</p>
         return self._redirect(target)
 
     # Netzwerk / DNS / Speicher / Benutzer / Einstellungen
-    def page_network(self):
-        ifaces = sysinfo.interfaces()
-        iface_rows = ""
-        for iface in ifaces:
-            addresses = ", ".join(f"{a['address']}/{a['prefix']}" for a in iface["addresses"]) or "—"
-            iface_rows += (f"<tr><td class='mono'><b>{ui.esc(iface['name'])}</b></td>"
-                           f"<td>{ui.esc(iface['state'])}</td>"
-                           f"<td class='mono'>{ui.esc(addresses)}</td>"
-                           f"<td class='mono'>{ui.esc(iface['mac'])}</td></tr>")
-        iface_rows = iface_rows or "<tr><td colspan='4' class='muted'>Keine Daten.</td></tr>"
+    def _cloudflare_block(self):
+        domain = store.get_setting("manage_domain", "")
+        server_ip = store.get_setting("server_ip", "")
+        if store.get_setting("cf_token", ""):
+            cloudflare = integrations.Cloudflare(store.get_setting("cf_token", ""))
+            valid, info = cloudflare.verify()
+            zones = ", ".join(z["name"] for z in cloudflare.zones()) if valid else ""
+            state = ('<span class="pill run"><span class="dot"></span>verknüpft</span>' if valid
+                     else f'<span class="pill err"><span class="dot"></span>{ui.esc(info)}</span>')
+            zones_html = (f'<p class="help">Domains: <span class="mono">{ui.esc(zones)}</span></p>'
+                          if zones else "")
+            return f"""<div class="between">
+<div>{state} &nbsp; <span class="muted">Konto:</span>
+<span class="mono">{ui.esc(store.get_setting('cf_account', '—'))}</span>{zones_html}</div>
+<form method="post" action="/network">{ui.csrf_input(self.csrf)}
+<input type="hidden" name="action" value="cf_unlink">
+<button class="btn danger" type="submit"
+ onclick="return confirm('Verknüpfung wirklich lösen?')">Verknüpfung lösen</button></form></div>"""
+        client_id = store.get_setting("cf_client_id", "")
+        redirect_uri = (f"https://{domain}/network/cloudflare/callback" if domain
+                        else "https://<deine-domain>/network/cloudflare/callback")
+        return f"""<p class="help" style="margin-bottom:14px">Konto verknüpfen — DNS-Einträge
+werden danach je App automatisch angelegt. Zwei Wege:</p>
+<div class="grid g2">
+<div>
+<h3>1 · Mit Cloudflare anmelden</h3>
+<p class="help" style="margin-bottom:10px">Anmeldung direkt bei Cloudflare, ohne Zugangsdaten
+im Panel. Voraussetzung: ein OAuth-Client im Cloudflare-Konto
+(Konto verwalten → OAuth clients → Create client) mit dieser Rückleitung:</p>
+<p class="help mono" style="word-break:break-all;margin-bottom:10px">{ui.esc(redirect_uri)}</p>
+<form method="post" action="/network">{ui.csrf_input(self.csrf)}
+<input type="hidden" name="action" value="cf_oauth">
+<div class="field"><label for="cf_client_id">Client-ID</label>
+ <input id="cf_client_id" name="cf_client_id" value="{ui.esc(client_id)}"
+  placeholder="00000000-0000-0000-0000-000000000000" required></div>
+<div class="field"><label for="cf_client_secret">Client-Secret <span class="muted">(falls vergeben)</span></label>
+ <input id="cf_client_secret" name="cf_client_secret" type="password" autocomplete="off"></div>
+<button class="btn primary" type="submit">Mit Cloudflare anmelden</button></form></div>
+<div>
+<h3>2 · Konto-Anmeldung <span class="pill">ohne Vorbereitung</span></h3>
+<p class="help" style="margin-bottom:10px">Einmalige Anmeldung mit E-Mail und Konto-Schlüssel.
+Daraus entsteht ein Token nur für DNS, gültig ein Jahr. Der Schlüssel wird nicht gespeichert.</p>
+<form method="post" action="/network">{ui.csrf_input(self.csrf)}
+<input type="hidden" name="action" value="cf_link">
+<div class="field"><label for="cf_email">E-Mail des Kontos</label>
+ <input id="cf_email" name="cf_email" type="email" required autocomplete="off"></div>
+<div class="field"><label for="cf_key">Konto-Schlüssel (Global API Key)</label>
+ <input id="cf_key" name="cf_key" type="password" required autocomplete="off">
+ <p class="help">Cloudflare → Mein Profil → API-Tokens → Global API Key → View.</p></div>
+<button class="btn" type="submit">Konto verknüpfen</button></form></div>
+</div>"""
 
-        net_rows = ""
-        if dockerctl.available():
-            app_networks = {}
-            for app in store.list_apps():
-                app_networks.setdefault(app["network"], []).append(app["name"])
-            for net in dockerctl.networks():
-                details = dockerctl.network_details(net["Name"])
-                configs = (details.get("IPAM") or {}).get("Config") or []
-                subnet = ", ".join(c.get("Subnet", "") for c in configs) or "—"
-                used_by = ", ".join(app_networks.get(net["Name"], [])) or "—"
-                builtin = net["Name"] in ("bridge", "host", "none")
-                delete_btn = "" if builtin else f"""<form method="post" action="/network">
+    def _dns_records_html(self):
+        domain = store.get_setting("manage_domain", "")
+        token = store.get_setting("cf_token", "")
+        server_ip = store.get_setting("server_ip", "")
+        if not (token and domain):
+            return ""
+        rows, error = integrations.Cloudflare(token).list_records(domain)
+        rr = ""
+        for record in rows:
+            mark = (" <span class='pill run'>dieser Server</span>"
+                    if record.get("content") == server_ip else "")
+            rr += (f"<tr><td class='mono'>{ui.esc(record.get('type'))}</td>"
+                   f"<td class='mono'>{ui.esc(record.get('name'))}</td>"
+                   f"<td class='mono'>{ui.esc(record.get('content'))}{mark}</td>"
+                   f"<td>{'Proxy' if record.get('proxied') else 'DNS only'}</td>"
+                   f"<td><form method='post' action='/network' style='display:inline'>"
+                   f"{ui.csrf_input(self.csrf)}<input type='hidden' name='action' value='dns_delete'>"
+                   f"<input type='hidden' name='record_id' value=\"{ui.esc(record.get('id'))}\">"
+                   f"<button class='btn sm danger' type='submit'"
+                   f" onclick=\"return confirm('Eintrag löschen?')\">Löschen</button></form></td></tr>")
+        if not rr:
+            rr = f"<tr><td colspan='5' class='muted'>{ui.esc(error or 'Keine Einträge.')}</td></tr>"
+        return (f"<h3 style='margin-top:18px'>Einträge · <span class='mono'>{ui.esc(domain)}</span></h3>"
+                f"<div class='tbl-wrap'><table>"
+                f"<tr><th>Typ</th><th>Name</th><th>Ziel</th><th>Modus</th><th></th></tr>"
+                f"{rr}</table></div>"
+                f"<p class='help'>Einträge je App (A, MX, SPF …) werden automatisch angelegt.</p>")
+
+    def page_network(self):
+        adv = self._query().get("advanced") == "1"
+        app_by_port = {a["host_port"]: a for a in store.list_apps()}
+        ports = sysinfo.listening_ports()
+
+        def port_row(row):
+            app = app_by_port.get(row["port"])
+            owner = (f"<a href='/apps/{app['id']}'>{ui.esc(app['name'])}</a>" if app
+                     else ui.esc(row["process"] or "—"))
+            return (f"<tr><td class='mono'>{row['port']}</td><td>{ui.esc(row['proto'])}</td>"
+                    f"<td class='mono'>{ui.esc(row['address'])}</td><td>{owner}</td></tr>")
+
+        ext_ports = [r for r in ports if r["scope"] == "extern"]
+        int_ports = [r for r in ports if r["scope"] != "extern"]
+        ext_rows = ("".join(port_row(r) for r in ext_ports)
+                    or "<tr><td colspan='4' class='muted'>Keine nach außen offenen Ports.</td></tr>")
+
+        # externe Adressen (ohne loopback / link-local)
+        ext_addr = []
+        for iface in sysinfo.interfaces():
+            for a in iface["addresses"]:
+                if not str(a["address"]).startswith(("127.", "::1", "fe80")):
+                    ext_addr.append((iface["name"], f"{a['address']}/{a['prefix']}"))
+        addr_rows = ("".join(f"<tr><td class='mono'>{ui.esc(n)}</td>"
+                             f"<td class='mono'>{ui.esc(a)}</td></tr>" for n, a in ext_addr)
+                     or "<tr><td colspan='2' class='muted'>Keine externe Adresse.</td></tr>")
+
+        toggle = (f'<a class="btn sm" href="/network">Weniger anzeigen</a>' if adv
+                  else f'<a class="btn sm" href="/network?advanced=1">Erweitert: intern &amp; Subnetze</a>')
+
+        advanced_html = ""
+        if adv:
+            int_rows = ("".join(port_row(r) for r in int_ports)
+                        or "<tr><td colspan='4' class='muted'>Keine internen Ports.</td></tr>")
+            iface_rows = ""
+            for iface in sysinfo.interfaces():
+                addresses = ", ".join(f"{a['address']}/{a['prefix']}"
+                                      for a in iface["addresses"]) or "—"
+                iface_rows += (f"<tr><td class='mono'><b>{ui.esc(iface['name'])}</b></td>"
+                               f"<td>{ui.esc(iface['state'])}</td>"
+                               f"<td class='mono'>{ui.esc(addresses)}</td>"
+                               f"<td class='mono'>{ui.esc(iface['mac'])}</td></tr>")
+            iface_rows = iface_rows or "<tr><td colspan='4' class='muted'>Keine Daten.</td></tr>"
+
+            net_rows = ""
+            if dockerctl.available():
+                app_networks = {}
+                for app in store.list_apps():
+                    app_networks.setdefault(app["network"], []).append(app["name"])
+                for net in dockerctl.networks():
+                    details = dockerctl.network_details(net["Name"])
+                    configs = (details.get("IPAM") or {}).get("Config") or []
+                    subnet = ", ".join(c.get("Subnet", "") for c in configs) or "—"
+                    used_by = ", ".join(app_networks.get(net["Name"], [])) or "—"
+                    builtin = net["Name"] in ("bridge", "host", "none")
+                    del_btn = "" if builtin else f"""<form method="post" action="/network" style="display:inline">
 {ui.csrf_input(self.csrf)}<input type="hidden" name="action" value="delete_network">
 <input type="hidden" name="name" value="{ui.esc(net['Name'])}">
 <button class="btn sm danger" type="submit"
  onclick="return confirm('Subnetz {ui.esc(net['Name'])} löschen?')">Löschen</button></form>"""
-                net_rows += (f"<tr><td class='mono'><b>{ui.esc(net['Name'])}</b></td>"
-                             f"<td class='mono'>{ui.esc(subnet)}</td>"
-                             f"<td>{ui.esc(net.get('Driver', ''))}</td>"
-                             f"<td>{ui.esc(used_by)}</td><td>{delete_btn}</td></tr>")
-        net_rows = net_rows or "<tr><td colspan='5' class='muted'>Docker nicht verfügbar.</td></tr>"
+                    net_rows += (f"<tr><td class='mono'><b>{ui.esc(net['Name'])}</b></td>"
+                                 f"<td class='mono'>{ui.esc(subnet)}</td>"
+                                 f"<td>{ui.esc(net.get('Driver', ''))}</td>"
+                                 f"<td>{ui.esc(used_by)}</td><td>{del_btn}</td></tr>")
+            net_rows = net_rows or "<tr><td colspan='5' class='muted'>Docker nicht verfügbar.</td></tr>"
 
-        port_rows = ""
-        app_by_port = {a["host_port"]: a for a in store.list_apps()}
-        for row in sysinfo.listening_ports():
-            app = app_by_port.get(row["port"])
-            owner = (f"<a href='/apps/{app['id']}'>{ui.esc(app['name'])}</a>" if app
-                     else ui.esc(row["process"] or "—"))
-            scope = ("<span class='pill run'>intern</span>" if row["scope"] == "intern"
-                     else "<span class='pill'>extern</span>")
-            port_rows += (f"<tr><td class='mono'>{row['port']}</td><td>{ui.esc(row['proto'])}</td>"
-                          f"<td>{scope}</td><td class='mono'>{ui.esc(row['address'])}</td>"
-                          f"<td>{owner}</td></tr>")
-        port_rows = port_rows or "<tr><td colspan='5' class='muted'>Keine Daten.</td></tr>"
-
-        body = f"""<h1>Netzwerk</h1>
-<p class="sub">Schnittstellen, Subnetze und alle belegten Ports.</p>
+            advanced_html = f"""
+<h2>Interne Ports</h2>
+<div class="card"><div class="tbl-wrap"><table>
+<tr><th>Port</th><th>Protokoll</th><th>Adresse</th><th>Dienst</th></tr>{int_rows}</table></div></div>
+<h2>Schnittstellen</h2>
+<div class="card"><div class="tbl-wrap"><table>
+<tr><th>Name</th><th>Status</th><th>Adressen</th><th>MAC</th></tr>{iface_rows}</table></div></div>
 <h2>Subnetze (Docker-Netzwerke)</h2>
 <div class="card"><div class="tbl-wrap"><table>
 <tr><th>Name</th><th>Subnetz</th><th>Treiber</th><th>Genutzt von</th><th></th></tr>{net_rows}</table></div>
@@ -939,14 +1040,20 @@ Container neu; die Daten bleiben erhalten.</p>
 <input name="subnet" placeholder="10.80.0.0/24" style="flex:1;min-width:160px">
 <label class="check"><input type="checkbox" name="internal" value="1">
 <span class="help" style="margin:0">isoliert (kein Internet)</span></label>
-<button class="btn primary" type="submit">Anlegen</button></form></div>
-<h2>Schnittstellen</h2>
+<button class="btn primary" type="submit">Anlegen</button></form></div>"""
+
+        body = f"""<h1>Netzwerk</h1>
+<p class="sub">DNS-Konto, offene Ports und Verbindungen.</p>
+<h2>DNS</h2>
+<div class="card">{self._cloudflare_block()}{self._dns_records_html()}</div>
+<div class="between" style="margin:30px 0 11px">
+<h2 style="margin:0">Offene Ports (extern)</h2>{toggle}</div>
 <div class="card"><div class="tbl-wrap"><table>
-<tr><th>Name</th><th>Status</th><th>Adressen</th><th>MAC</th></tr>{iface_rows}</table></div></div>
-<h2>Belegte Ports</h2>
+<tr><th>Port</th><th>Protokoll</th><th>Adresse</th><th>Dienst</th></tr>{ext_rows}</table></div></div>
+<h2>Externe Adressen</h2>
 <div class="card"><div class="tbl-wrap"><table>
-<tr><th>Port</th><th>Protokoll</th><th>Sichtbarkeit</th><th>Adresse</th><th>Dienst</th></tr>
-{port_rows}</table></div></div>"""
+<tr><th>Schnittstelle</th><th>Adresse</th></tr>{addr_rows}</table></div></div>
+{advanced_html}"""
         self._render("Netzwerk", body, "/network")
 
     def do_network(self, form):
@@ -956,73 +1063,54 @@ Container neu; die Daten bleiben erhalten.</p>
                 dockerctl.create_network(form.get("name", "").strip(),
                                          form.get("subnet", "").strip() or None,
                                          internal=form.get("internal") == "1")
-                return self._redirect("/network", ("ok", "Subnetz angelegt."))
+                return self._redirect("/network?advanced=1", ("ok", "Subnetz angelegt."))
             if action == "delete_network":
                 dockerctl.remove_network(form.get("name", ""))
-                return self._redirect("/network", ("ok", "Subnetz gelöscht."))
+                return self._redirect("/network?advanced=1", ("ok", "Subnetz gelöscht."))
+            if action == "dns_delete":
+                domain = store.get_setting("manage_domain", "")
+                cloudflare = integrations.Cloudflare(store.get_setting("cf_token", ""))
+                ok, err = cloudflare.delete_record(domain, form.get("record_id", ""))
+                return self._redirect("/network", ("ok", "Eintrag gelöscht.") if ok
+                                      else ("err", err or "Fehler"))
+            if action == "cf_oauth":
+                return self._cf_oauth_start(form)
+            if action == "cf_link":
+                token, err = integrations.link_account(
+                    form.get("cf_email", ""), form.get("cf_key", ""),
+                    label=store.get_setting("manage_domain", "weblab"))
+                if not token:
+                    return self._redirect("/network", ("err", f"Verknüpfung fehlgeschlagen: {err}"))
+                store.set_setting("cf_token", token)
+                store.set_setting("cf_account", form.get("cf_email", "").strip())
+                store.set_setting("cf_status", "verknüpft")
+                return self._redirect("/network", ("ok", "Cloudflare-Konto verknüpft."))
+            if action == "cf_unlink":
+                for key in ("cf_token", "cf_account"):
+                    store.set_setting(key, "")
+                store.set_setting("cf_status", "nicht verknüpft")
+                return self._redirect("/network", ("ok", "Verknüpfung gelöst."))
         except Exception as exc:  # noqa: BLE001
             return self._redirect("/network", ("err", str(exc)))
         return self._redirect("/network")
 
-    def page_dns(self):
+    def _cf_oauth_start(self, form):
+        client_id = (form.get("cf_client_id") or store.get_setting("cf_client_id", "")).strip()
+        if not client_id:
+            return self._redirect("/network", ("err", "Bitte die OAuth-Client-ID eintragen."))
+        store.set_setting("cf_client_id", client_id)
         domain = store.get_setting("manage_domain", "")
-        token = store.get_setting("cf_token", "")
-        server_ip = store.get_setting("server_ip", "")
-        rows, error = ([], "Kein Cloudflare-Token hinterlegt (Einstellungen).")
-        if token and domain:
-            rows, error = integrations.Cloudflare(token).list_records(domain)
-
-        record_rows = ""
-        for record in rows:
-            points_here = record.get("content") == server_ip
-            mark = " <span class='pill run'>dieser Server</span>" if points_here else ""
-            record_rows += f"""<tr><td class="mono">{ui.esc(record.get('type'))}</td>
-<td class="mono">{ui.esc(record.get('name'))}</td>
-<td class="mono">{ui.esc(record.get('content'))}{mark}</td>
-<td>{'Proxy' if record.get('proxied') else 'DNS only'}</td>
-<td><form method="post" action="/dns">{ui.csrf_input(self.csrf)}
-<input type="hidden" name="action" value="delete">
-<input type="hidden" name="record_id" value="{ui.esc(record.get('id'))}">
-<button class="btn sm danger" type="submit"
- onclick="return confirm('Eintrag löschen?')">Löschen</button></form></td></tr>"""
-        if not record_rows:
-            record_rows = (f"<tr><td colspan='5' class='muted'>{ui.esc(error or 'Keine Einträge.')}"
-                           f"</td></tr>")
-
-        body = f"""<h1>DNS</h1>
-<p class="sub">Einträge der Domain <b class="mono">{ui.esc(domain) or '—'}</b> über Cloudflare.</p>
-<div class="card"><div class="tbl-wrap"><table>
-<tr><th>Typ</th><th>Name</th><th>Ziel</th><th>Modus</th><th></th></tr>{record_rows}</table></div>
-<h3 style="margin-top:18px">Eintrag anlegen / ersetzen</h3>
-<form method="post" action="/dns" class="row">{ui.csrf_input(self.csrf)}
-<input type="hidden" name="action" value="set">
-<select name="type" style="max-width:110px"><option>A</option><option>CNAME</option><option>TXT</option></select>
-<input name="name" placeholder="app.{ui.esc(domain) or 'example.com'}" required style="flex:1;min-width:180px">
-<input name="content" value="{ui.esc(server_ip)}" required style="flex:1;min-width:150px">
-<label class="check"><input type="checkbox" name="proxied" value="1">
-<span class="help" style="margin:0">Cloudflare-Proxy</span></label>
-<button class="btn primary" type="submit">Speichern</button></form>
-<p class="help">Für neue Apps genügt ein A-Record auf {ui.esc(server_ip) or 'die Server-IP'}.</p>
-</div>"""
-        self._render("DNS", body, "/dns")
-
-    def do_dns(self, form):
-        domain = store.get_setting("manage_domain", "")
-        cloudflare = integrations.Cloudflare(store.get_setting("cf_token", ""))
-        try:
-            if form.get("action") == "set":
-                ok, err = cloudflare.set_record(
-                    domain, form.get("name", "").strip(), form.get("content", "").strip(),
-                    form.get("type", "A"), proxied=form.get("proxied") == "1")
-                return self._redirect("/dns", ("ok", "Eintrag gespeichert.") if ok
-                                      else ("err", err or "Fehler"))
-            if form.get("action") == "delete":
-                ok, err = cloudflare.delete_record(domain, form.get("record_id", ""))
-                return self._redirect("/dns", ("ok", "Eintrag gelöscht.") if ok
-                                      else ("err", err or "Fehler"))
-        except Exception as exc:  # noqa: BLE001
-            return self._redirect("/dns", ("err", str(exc)))
-        return self._redirect("/dns")
+        if not domain:
+            return self._redirect("/network", ("err", "Bitte zuerst die Verwaltungs-Domain setzen."))
+        redirect_uri = f"https://{domain}/network/cloudflare/callback"
+        verifier, challenge = integrations.pkce_pair()
+        state = secrets.token_urlsafe(24)
+        CF_LOGIN.update({"state": state, "verifier": verifier, "client_id": client_id,
+                         "client_secret": (form.get("cf_client_secret") or "").strip(),
+                         "redirect_uri": redirect_uri})
+        return self._send("", 303, "text/plain",
+                          {"Location": integrations.authorize_url(client_id, redirect_uri,
+                                                                  state, challenge)})
 
     def page_storage(self):
         mount_rows = ""
@@ -1147,60 +1235,10 @@ Container neu; die Daten bleiben erhalten.</p>
     def page_settings(self):
         domain = store.get_setting("manage_domain", "")
         server_ip = store.get_setting("server_ip", "")
-        has_token = bool(store.get_setting("cf_token", ""))
         connectors = catalog.load_all()
 
-        if has_token:
-            cloudflare = integrations.Cloudflare(store.get_setting("cf_token", ""))
-            valid, info = cloudflare.verify()
-            zones = cloudflare.zones() if valid else []
-            zone_list = ", ".join(z["name"] for z in zones) or "—"
-            state = ('<span class="pill run"><span class="dot"></span>verknüpft</span>' if valid
-                     else f'<span class="pill err"><span class="dot"></span>{ui.esc(info)}</span>')
-            cf_block = f"""<p>{state} &nbsp; <span class="muted">Konto:</span>
-<span class="mono">{ui.esc(store.get_setting('cf_account', '—'))}</span></p>
-<p class="help">Domains im Konto: <span class="mono">{ui.esc(zone_list)}</span></p>
-<p class="help">Zugriff beschränkt auf DNS.</p>
-<form method="post" action="/settings" style="margin-top:10px">{ui.csrf_input(self.csrf)}
-<input type="hidden" name="action" value="cf_unlink">
-<button class="btn danger" type="submit"
- onclick="return confirm('Verknüpfung wirklich lösen?')">Verknüpfung lösen</button></form>"""
-        else:
-            client_id = store.get_setting("cf_client_id", "")
-            redirect_uri = (f"https://{domain}/settings/cloudflare/callback" if domain
-                            else "https://<deine-domain>/settings/cloudflare/callback")
-            cf_block = f"""<p class="help" style="margin-bottom:14px">Nach dem Verknüpfen werden DNS-Einträge
-automatisch angelegt. Zwei Wege:</p>
-<div class="grid g2">
-<div>
-<h3>1 · Mit Cloudflare anmelden</h3>
-<p class="help" style="margin-bottom:10px">Anmeldung direkt bei Cloudflare, ohne Zugangsdaten
-im Panel. Voraussetzung: ein OAuth-Client im Cloudflare-Konto
-(Konto verwalten → OAuth clients → Create client) mit dieser Rückleitung:</p>
-<p class="help mono" style="word-break:break-all;margin-bottom:10px">{ui.esc(redirect_uri)}</p>
-<form method="post" action="/settings">{ui.csrf_input(self.csrf)}
-<input type="hidden" name="action" value="cf_oauth">
-<div class="field"><label for="cf_client_id">Client-ID</label>
- <input id="cf_client_id" name="cf_client_id" value="{ui.esc(client_id)}"
-  placeholder="00000000-0000-0000-0000-000000000000" required></div>
-<div class="field"><label for="cf_client_secret">Client-Secret <span class="muted">(falls vergeben)</span></label>
- <input id="cf_client_secret" name="cf_client_secret" type="password" autocomplete="off"></div>
-<button class="btn primary" type="submit">Mit Cloudflare anmelden</button></form></div>
-<div>
-<h3>2 · Konto-Anmeldung <span class="pill">ohne Vorbereitung</span></h3>
-<p class="help" style="margin-bottom:10px">Einmalige Anmeldung mit E-Mail und Konto-Schlüssel.
-Daraus entsteht ein Token nur für DNS, gültig ein Jahr. Der Schlüssel wird nicht gespeichert.</p>
-<form method="post" action="/settings">{ui.csrf_input(self.csrf)}
-<input type="hidden" name="action" value="cf_link">
-<div class="field"><label for="cf_email">E-Mail des Kontos</label>
- <input id="cf_email" name="cf_email" type="email" required autocomplete="off"></div>
-<div class="field"><label for="cf_key">Konto-Schlüssel (Global API Key)</label>
- <input id="cf_key" name="cf_key" type="password" required autocomplete="off">
- <p class="help">Cloudflare → Mein Profil → API-Tokens → Global API Key → View.</p></div>
-<button class="btn" type="submit">Konto verknüpfen</button></form></div>
-</div>"""
         body = f"""<h1>Einstellungen</h1>
-<p class="sub">Domain, DNS-Zugang und Katalog.</p>
+<p class="sub">Domain, Server und Katalog. DNS-Konto unter Netzwerk.</p>
 <div class="grid g2">
 <div class="card"><h3>Server &amp; Domain</h3>
 <form method="post" action="/settings">{ui.csrf_input(self.csrf)}
@@ -1223,8 +1261,6 @@ Daraus entsteht ein Token nur für DNS, gültig ein Jahr. Der Schlüssel wird ni
 <button class="btn" type="submit">Katalog neu einlesen</button></form>
 <p class="help">Connector-Dateien liegen unter <code>{ui.esc(catalog.CONNECTOR_DIR)}</code>.</p></div>
 </div>
-<h2>Cloudflare-Konto</h2>
-<div class="card">{cf_block}</div>
 <h2>Status</h2>
 <div class="card"><dl class="kv">
 <dt>Docker</dt><dd>{'aktiv' if dockerctl.available() else 'nicht verfügbar'}</dd>
@@ -1235,40 +1271,6 @@ Daraus entsteht ein Token nur für DNS, gültig ein Jahr. Der Schlüssel wird ni
 
     def do_settings(self, form):
         action = form.get("action")
-        if action == "cf_oauth":
-            client_id = (form.get("cf_client_id") or
-                         store.get_setting("cf_client_id", "")).strip()
-            client_secret = (form.get("cf_client_secret") or "").strip()
-            if not client_id:
-                return self._redirect("/settings", ("err", "Bitte die OAuth-Client-ID eintragen."))
-            store.set_setting("cf_client_id", client_id)
-            domain = store.get_setting("manage_domain", "")
-            if not domain:
-                return self._redirect("/settings", ("err", "Bitte zuerst die Verwaltungs-Domain setzen."))
-            redirect_uri = f"https://{domain}/settings/cloudflare/callback"
-            verifier, challenge = integrations.pkce_pair()
-            state = secrets.token_urlsafe(24)
-            CF_LOGIN.update({"state": state, "verifier": verifier, "client_id": client_id,
-                             "client_secret": client_secret, "redirect_uri": redirect_uri})
-            url = integrations.authorize_url(client_id, redirect_uri, state, challenge)
-            return self._send("", 303, "text/plain", {"Location": url})
-        if action == "cf_link":
-            token, err = integrations.link_account(
-                form.get("cf_email", ""), form.get("cf_key", ""),
-                label=store.get_setting("manage_domain", "weblab"))
-            if not token:
-                return self._redirect("/settings", ("err", f"Verknüpfung fehlgeschlagen: {err}"))
-            store.set_setting("cf_token", token)
-            store.set_setting("cf_account", form.get("cf_email", "").strip())
-            store.set_setting("cf_status", "verknüpft")
-            return self._redirect("/settings",
-                                  ("ok", "Cloudflare-Konto verknüpft — DNS wird ab jetzt "
-                                         "automatisch gepflegt."))
-        if action == "cf_unlink":
-            store.set_setting("cf_token", "")
-            store.set_setting("cf_account", "")
-            store.set_setting("cf_status", "nicht verknüpft")
-            return self._redirect("/settings", ("ok", "Verknüpfung gelöst."))
         if action == "reload_catalog":
             catalog.load_all(force=True)
             return self._redirect("/settings", ("ok", "Katalog neu eingelesen."))
@@ -1287,20 +1289,20 @@ Daraus entsteht ein Token nur für DNS, gültig ein Jahr. Der Schlüssel wird ni
     def cf_callback(self):
         query = self._query()
         if query.get("error"):
-            return self._redirect("/settings",
+            return self._redirect("/network",
                                   ("err", f"Cloudflare: {query.get('error_description') or query['error']}"))
         if not CF_LOGIN.get("state") or query.get("state") != CF_LOGIN["state"]:
-            return self._redirect("/settings", ("err", "Anmeldung abgelaufen — bitte erneut starten."))
+            return self._redirect("/network", ("err", "Anmeldung abgelaufen — bitte erneut starten."))
         token, err = integrations.exchange_code(
             CF_LOGIN["client_id"], CF_LOGIN["client_secret"], CF_LOGIN["redirect_uri"],
             query.get("code", ""), CF_LOGIN["verifier"])
         CF_LOGIN.update({"state": "", "verifier": "", "client_secret": ""})
         if not token:
-            return self._redirect("/settings", ("err", f"Anmeldung fehlgeschlagen: {err}"))
+            return self._redirect("/network", ("err", f"Anmeldung fehlgeschlagen: {err}"))
         store.set_setting("cf_token", token)
         store.set_setting("cf_account", "über Cloudflare-Anmeldung")
         store.set_setting("cf_status", "verknüpft")
-        return self._redirect("/settings", ("ok", "Cloudflare-Konto verknüpft."))
+        return self._redirect("/network", ("ok", "Cloudflare-Konto verknüpft."))
 
     # Dateien einer App
     def _app_base(self, app):

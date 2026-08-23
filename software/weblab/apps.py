@@ -459,6 +459,8 @@ def update(app_id, form, section="basic"):
         write_init_files(app, connector, app["values"])
         apply_config_files(app, connector, app["values"])
         apply_firewall(app, connector)
+        if app.get("domain"):
+            apply_dns(app, connector, app["values"])
         sync_proxy()
     else:
         env_changed = any((f.get("target") or {}).get("kind") == "env"
