@@ -14,6 +14,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import apps as appsvc
 import catalog
 import dockerctl
+import files
 import integrations
 import store
 import sysinfo
@@ -26,6 +27,10 @@ SESSION_MAX_AGE = 12 * 3600
 
 # Fortschritt des Setup-Assistenten (Ladebalken)
 SETUP_STATE = {"running": False, "percent": 0, "step": "", "done": False, "error": None}
+
+# Laufende Cloudflare-Anmeldung per Geräte-Code
+CF_LOGIN = {"active": False, "user_code": "", "url": "", "device_code": "",
+            "client_id": "", "status": "", "done": False}
 
 
 # --------------------------------------------------------------------------
@@ -65,27 +70,38 @@ def csrf_for(session):
 # --------------------------------------------------------------------------
 # Setup-Ablauf (im Hintergrund, damit der Ladebalken laufen kann)
 # --------------------------------------------------------------------------
-def run_setup(username, password, domain, cf_token):
+def run_setup(username, password, domain, cf_email="", cf_key=""):
     def worker():
         try:
             SETUP_STATE.update({"running": True, "percent": 5, "step": "Benutzer anlegen",
                                 "done": False, "error": None})
             if store.user_count() == 0:
                 store.create_user(username, password)
-            SETUP_STATE.update({"percent": 20, "step": "Domain speichern"})
+            SETUP_STATE.update({"percent": 15, "step": "Domain speichern"})
             store.set_setting("manage_domain", domain)
-            if cf_token:
-                store.set_setting("cf_token", cf_token)
 
-            SETUP_STATE.update({"percent": 35, "step": "Server-IP ermitteln"})
+            SETUP_STATE.update({"percent": 25, "step": "Server-IP ermitteln"})
             server_ip = sysinfo.public_ip()
             store.set_setting("server_ip", server_ip)
 
+            cf_token = ""
+            if cf_email and cf_key:
+                SETUP_STATE.update({"percent": 40, "step": "Cloudflare-Konto verknüpfen"})
+                cf_token, err = integrations.link_account(cf_email, cf_key, label=domain or "weblab")
+                if cf_token:
+                    store.set_setting("cf_token", cf_token)
+                    store.set_setting("cf_account", cf_email)
+                    store.set_setting("cf_status", "verknüpft")
+                else:
+                    store.set_setting("cf_status", f"nicht verknüpft: {err or ''}")
+
             if cf_token and domain:
-                SETUP_STATE.update({"percent": 50, "step": "DNS bei Cloudflare setzen"})
+                SETUP_STATE.update({"percent": 55, "step": "DNS-Eintrag anlegen"})
                 ok, err = integrations.Cloudflare(cf_token).set_record(
-                    domain, domain, server_ip, "A", proxied=False)
-                store.set_setting("dns_status", "ok" if ok else f"manuell: {err or ''}")
+                    domain, domain, server_ip, "A", proxied=False,
+                    comment="weblab Verwaltungsoberfläche")
+                store.set_setting("dns_status", "automatisch gesetzt" if ok
+                                  else f"manuell nötig: {err or ''}")
             else:
                 store.set_setting("dns_status", "manuell")
 
@@ -247,6 +263,12 @@ class Handler(BaseHTTPRequestHandler):
         match = re.fullmatch(r"/apps/(\d+)/logs", path)
         if match:
             return self.page_app_logs(int(match.group(1)))
+        match = re.fullmatch(r"/apps/(\d+)/files", path)
+        if match:
+            return self.page_app_files(int(match.group(1)))
+        match = re.fullmatch(r"/apps/(\d+)/files/download", path)
+        if match:
+            return self.download_file(int(match.group(1)))
         match = re.fullmatch(r"/apps/(\d+)/edit", path)
         if match:
             return self.page_app_edit(int(match.group(1)))
@@ -260,11 +282,21 @@ class Handler(BaseHTTPRequestHandler):
             return self.page_users()
         if path == "/settings":
             return self.page_settings()
+        if path == "/settings/cloudflare":
+            return self.page_cf_login()
+        if path == "/api/cloudflare/status":
+            return self._json(self.cf_login_status())
         return self._send(ui.page("Nicht gefunden", "<h1>404</h1><p class='sub'>Seite gibt es nicht.</p>",
                                   user=(self.session or {}).get("user")), 404)
 
     # ---------------- POST ----------------
     def route_post(self, path):
+        content_type = self.headers.get("Content-Type", "")
+        if content_type.startswith("multipart/form-data"):
+            match = re.fullmatch(r"/apps/(\d+)/files", path)
+            if not match or not self._require_auth():
+                return self._redirect("/apps")
+            return self.do_upload(int(match.group(1)), content_type)
         form = self._form()
 
         if path == "/setup":
@@ -289,6 +321,9 @@ class Handler(BaseHTTPRequestHandler):
         match = re.fullmatch(r"/apps/(\d+)/plugins", path)
         if match:
             return self.do_plugins(int(match.group(1)), form)
+        match = re.fullmatch(r"/apps/(\d+)/files", path)
+        if match:
+            return self.do_files(int(match.group(1)), form)
         if path == "/network":
             return self.do_network(form)
         if path == "/dns":
@@ -320,9 +355,12 @@ class Handler(BaseHTTPRequestHandler):
  <div class="field"><label for="domain">Verwaltungs-Domain</label>
   <input id="domain" name="domain" placeholder="example.com" required>
   <p class="help">Der A-Record (@) dieser Domain muss auf diesen Server zeigen{f' ({ui.esc(server_ip)})' if server_ip else ''}.</p></div>
- <div class="field"><label for="cf_token">Cloudflare API-Token <span class="muted">(optional)</span></label>
-  <input id="cf_token" name="cf_token" type="password" autocomplete="off">
-  <p class="help">Mit Token setzt weblab den A-Record selbst. Ohne Token trägst du ihn manuell ein.</p></div>
+ <div class="field"><label for="cf_email">Cloudflare-Konto <span class="muted">(optional)</span></label>
+  <input id="cf_email" name="cf_email" type="email" placeholder="E-Mail deines Cloudflare-Kontos" autocomplete="off">
+  <input id="cf_key" name="cf_key" type="password" placeholder="Konto-Schlüssel" autocomplete="off" style="margin-top:8px">
+  <p class="help">Damit legt weblab alle DNS-Einträge automatisch an. Du musst selbst keinen
+  Token erstellen — weblab erzeugt einen, der <b>nur DNS</b> darf. Der Konto-Schlüssel wird
+  dafür einmal verwendet und <b>nicht gespeichert</b>. Später jederzeit unter Einstellungen möglich.</p></div>
  <button class="btn primary" type="submit" style="width:100%">Einrichtung starten</button>
 </form></div></div>"""
         self._send(ui.bare("Einrichten", body))
@@ -335,7 +373,8 @@ class Handler(BaseHTTPRequestHandler):
         domain = (form.get("domain") or "").strip().lower().lstrip("@.")
         if not username or len(password) < 10 or not domain:
             return self._redirect("/setup", ("err", "Bitte alle Pflichtfelder korrekt ausfüllen."))
-        run_setup(username, password, domain, (form.get("cf_token") or "").strip())
+        run_setup(username, password, domain,
+                  (form.get("cf_email") or "").strip(), (form.get("cf_key") or "").strip())
         return self._redirect("/setup/progress")
 
     def page_setup_progress(self):
@@ -579,9 +618,12 @@ class Handler(BaseHTTPRequestHandler):
                                   else "/apps", ("err", f"Installation fehlgeschlagen: {exc}"))
         warnings = app.get("warnings") or []
         note = f"{app['name']} wurde installiert."
+        dns_done = app.get("dns_done") or []
+        if dns_done:
+            note += f" DNS gesetzt: {', '.join(dns_done)}."
         if warnings:
             note += " Hinweise: " + "; ".join(warnings)
-        return self._redirect(f"/apps/{app['id']}", ("ok" if not warnings else "err", note))
+        return self._redirect(f"/apps/{app['id']}", ("ok", note))
 
     # ==================================================================
     # App-Detail, Bearbeiten (Basis / Spezifisch / Erweitert), Aktionen
@@ -594,6 +636,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def _app_tabs(self, app, active):
         items = [("Übersicht", f"/apps/{app['id']}"),
+                 ("Dateien", f"/apps/{app['id']}/files"),
                  ("Einstellungen", f"/apps/{app['id']}/edit"),
                  ("Protokoll", f"/apps/{app['id']}/logs")]
         return '<div class="tabs">' + "".join(
@@ -618,6 +661,25 @@ class Handler(BaseHTTPRequestHandler):
 <label class="check" style="margin-left:6px"><input type="checkbox" name="delete_data" value="1">
 <span class="help" style="margin:0">Daten mitlöschen</span></label>
 </form>"""
+        secrets_html = ""
+        if connector:
+            rows = ""
+            for field in catalog.all_fields(connector):
+                if field.get("type") != "password":
+                    continue
+                value = app["values"].get(field["key"], "")
+                if not value:
+                    continue
+                rows += (f"<tr><td>{ui.esc(field.get('label', field['key']))}</td>"
+                         f"<td><code class='mono'>{ui.esc(value)}</code></td></tr>")
+            for note in connector.get("notes") or []:
+                rows += f"<tr><td colspan='2' class='help'>ℹ {ui.esc(note)}</td></tr>"
+            if rows:
+                secrets_html = (f"<h2>Zugangsdaten &amp; Hinweise</h2>"
+                                f"<div class='card'><div class='tbl-wrap'><table>{rows}</table></div>"
+                                f"<p class='help'>Diese Angaben nur hier sichtbar — bitte sicher "
+                                f"notieren.</p></div>")
+
         body = f"""<a href="/apps" class="muted">← Apps</a>
 <div class="between"><div><h1>{ui.esc(app['name'])}</h1>
 <p class="sub">{ui.esc(connector['name'] if connector else app['connector_id'])} · Version {ui.esc(app['version'])}</p></div>
@@ -638,6 +700,7 @@ class Handler(BaseHTTPRequestHandler):
 <dt>Datenpfad</dt><dd class="mono">{ui.esc(appsvc.host_data_path(app, app['data_path']))}</dd>
 <dt>Container</dt><dd class="mono">{ui.esc(dockerctl.container_name(app['slug']))}</dd>
 </dl></div>
+{secrets_html}
 <h2>Aktionen</h2><div class="card">{actions}</div>"""
         self._render(app["name"], body, "/apps")
 
@@ -1108,6 +1171,53 @@ danach automatisch neu gestartet.</p>
         server_ip = store.get_setting("server_ip", "")
         has_token = bool(store.get_setting("cf_token", ""))
         connectors = catalog.load_all()
+
+        if has_token:
+            cloudflare = integrations.Cloudflare(store.get_setting("cf_token", ""))
+            valid, info = cloudflare.verify()
+            zones = cloudflare.zones() if valid else []
+            zone_list = ", ".join(z["name"] for z in zones) or "—"
+            state = ('<span class="pill run"><span class="dot"></span>verknüpft</span>' if valid
+                     else f'<span class="pill err"><span class="dot"></span>{ui.esc(info)}</span>')
+            cf_block = f"""<p>{state} &nbsp; <span class="muted">Konto:</span>
+<span class="mono">{ui.esc(store.get_setting('cf_account', '—'))}</span></p>
+<p class="help">Domains im Konto: <span class="mono">{ui.esc(zone_list)}</span></p>
+<p class="help">weblab benutzt einen selbst erzeugten Token, der ausschließlich DNS ändern darf.</p>
+<form method="post" action="/settings" style="margin-top:10px">{ui.csrf_input(self.csrf)}
+<input type="hidden" name="action" value="cf_unlink">
+<button class="btn danger" type="submit"
+ onclick="return confirm('Verknüpfung wirklich lösen?')">Verknüpfung lösen</button></form>"""
+        else:
+            client_id = store.get_setting("cf_client_id", "")
+            cf_block = f"""<p class="help" style="margin-bottom:14px">Verknüpfe dein Cloudflare-Konto,
+damit weblab alle DNS-Einträge automatisch anlegt. Du musst <b>keinen Token selbst erstellen</b> —
+weblab besorgt sich den Zugang. Zwei Wege:</p>
+<div class="grid g2">
+<div class="card" style="box-shadow:none">
+<h3>1 · Mit Cloudflare anmelden <span class="pill">empfohlen</span></h3>
+<p class="help" style="margin-bottom:10px">weblab zeigt dir einen Code, du bestätigst ihn bei
+Cloudflare — ganz ohne Passwort oder Schlüssel im Panel. Einmalig nötig: eine OAuth-Client-ID
+(Cloudflare → Konto verwalten → OAuth clients → Create client, Geräte-Anmeldung erlauben).</p>
+<form method="post" action="/settings">{ui.csrf_input(self.csrf)}
+<input type="hidden" name="action" value="cf_device">
+<div class="field"><label for="cf_client_id">OAuth-Client-ID</label>
+ <input id="cf_client_id" name="cf_client_id" value="{ui.esc(client_id)}"
+  placeholder="00000000-0000-0000-0000-000000000000" required></div>
+<button class="btn primary" type="submit">Mit Cloudflare anmelden</button></form></div>
+<div class="card" style="box-shadow:none">
+<h3>2 · Konto-Anmeldung (ohne Vorbereitung)</h3>
+<p class="help" style="margin-bottom:10px">Einmalige Anmeldung mit Konto-E-Mail und
+Konto-Schlüssel. weblab erzeugt daraus selbst einen Token, der <b>nur DNS</b> darf. Der
+Schlüssel wird <b>nicht gespeichert</b>.</p>
+<form method="post" action="/settings">{ui.csrf_input(self.csrf)}
+<input type="hidden" name="action" value="cf_link">
+<div class="field"><label for="cf_email">E-Mail des Kontos</label>
+ <input id="cf_email" name="cf_email" type="email" required autocomplete="off"></div>
+<div class="field"><label for="cf_key">Konto-Schlüssel (Global API Key)</label>
+ <input id="cf_key" name="cf_key" type="password" required autocomplete="off">
+ <p class="help">Cloudflare → Mein Profil → API-Tokens → Global API Key → View.</p></div>
+<button class="btn" type="submit">Konto verknüpfen</button></form></div>
+</div>"""
         body = f"""<h1>Einstellungen</h1>
 <p class="sub">Domain, DNS-Zugang und Katalog.</p>
 <div class="grid g2">
@@ -1120,10 +1230,9 @@ danach automatisch neu gestartet.</p>
 <div class="field"><label for="server_ip">Server-IP</label>
  <input id="server_ip" name="server_ip" value="{ui.esc(server_ip)}">
  <p class="help">Leer lassen und speichern = automatisch neu ermitteln.</p></div>
-<div class="field"><label for="cf">Cloudflare API-Token</label>
- <input id="cf" name="cf_token" type="password" placeholder="{'gespeichert — leer lassen zum Behalten' if has_token else 'nicht gesetzt'}">
- <p class="help">Benötigt „Zone.DNS:Edit“. Ist der Token IP-gebunden, muss er diesen Server erlauben.</p></div>
-<button class="btn primary" type="submit">Speichern &amp; Proxy neu laden</button></form></div>
+<button class="btn primary" type="submit">Speichern &amp; Proxy neu laden</button></form>
+<h3 style="margin-top:22px">Cloudflare-Konto</h3>
+{cf_block}</div>
 <div class="card"><h3>Katalog</h3>
 <p class="help" style="margin-bottom:12px">{len(connectors)} Connector-Dateien ·
 {len(catalog.groups())} Apps im Katalog.</p>
@@ -1145,6 +1254,37 @@ danach automatisch neu gestartet.</p>
 
     def do_settings(self, form):
         action = form.get("action")
+        if action == "cf_device":
+            client_id = (form.get("cf_client_id") or
+                         store.get_setting("cf_client_id", "")).strip()
+            if not client_id:
+                return self._redirect("/settings", ("err", "Bitte zuerst eine OAuth-Client-ID "
+                                                           "aus deinem Cloudflare-Konto eintragen."))
+            store.set_setting("cf_client_id", client_id)
+            info, err = integrations.device_start(client_id)
+            if not info:
+                return self._redirect("/settings", ("err", f"Anmeldung nicht möglich: {err}"))
+            CF_LOGIN.update({"active": True, "done": False, "client_id": client_id,
+                             "device_code": info["device_code"], "user_code": info["user_code"],
+                             "url": info["verification_uri"], "status": "pending"})
+            return self._redirect("/settings/cloudflare")
+        if action == "cf_link":
+            token, err = integrations.link_account(
+                form.get("cf_email", ""), form.get("cf_key", ""),
+                label=store.get_setting("manage_domain", "weblab"))
+            if not token:
+                return self._redirect("/settings", ("err", f"Verknüpfung fehlgeschlagen: {err}"))
+            store.set_setting("cf_token", token)
+            store.set_setting("cf_account", form.get("cf_email", "").strip())
+            store.set_setting("cf_status", "verknüpft")
+            return self._redirect("/settings",
+                                  ("ok", "Cloudflare-Konto verknüpft — DNS wird ab jetzt "
+                                         "automatisch gepflegt."))
+        if action == "cf_unlink":
+            store.set_setting("cf_token", "")
+            store.set_setting("cf_account", "")
+            store.set_setting("cf_status", "nicht verknüpft")
+            return self._redirect("/settings", ("ok", "Verknüpfung gelöst."))
         if action == "reload_catalog":
             catalog.load_all(force=True)
             return self._redirect("/settings", ("ok", "Katalog neu eingelesen."))
@@ -1153,13 +1293,246 @@ danach automatisch neu gestartet.</p>
             store.set_setting("manage_domain", domain)
             server_ip = (form.get("server_ip") or "").strip() or sysinfo.public_ip()
             store.set_setting("server_ip", server_ip)
-            token = (form.get("cf_token") or "").strip()
-            if token:
-                store.set_setting("cf_token", token)
             ok, err = appsvc.sync_proxy()
             return self._redirect("/settings", ("ok", "Gespeichert.") if ok
                                   else ("err", f"Proxy-Fehler: {err}"))
         return self._redirect("/settings")
+
+
+    # ==================================================================
+    # Cloudflare-Anmeldung per Geräte-Code
+    # ==================================================================
+    def page_cf_login(self):
+        if not CF_LOGIN.get("active"):
+            return self._redirect("/settings", ("err", "Keine Anmeldung gestartet."))
+        body = f"""<a href="/settings" class="muted">← Einstellungen</a>
+<h1>Bei Cloudflare anmelden</h1>
+<p class="sub">Melde dich in einem neuen Tab bei Cloudflare an und bestätige den Zugriff.
+weblab holt sich den Zugang danach automatisch.</p>
+<div class="card">
+<p>Dein Anmeldecode:</p>
+<div class="v mono" style="font-size:34px;letter-spacing:4px;font-weight:700;margin:10px 0">
+{ui.esc(CF_LOGIN['user_code'])}</div>
+<p><a class="btn primary" href="{ui.esc(CF_LOGIN['url'])}" target="_blank" rel="noopener">
+Cloudflare öffnen und bestätigen</a></p>
+<div class="progress"><i id="bar" style="width:12%"></i></div>
+<p class="help" id="state">Warte auf Bestätigung …</p>
+</div>
+<script>
+(function(){{
+ var n=0;
+ function tick(){{
+  fetch('/api/cloudflare/status').then(function(r){{return r.json()}}).then(function(s){{
+   n=Math.min(92,n+4); document.getElementById('bar').style.width=n+'%';
+   if(s.done){{document.getElementById('bar').style.width='100%';
+     document.getElementById('state').textContent='Verknüpft — weiter …';
+     setTimeout(function(){{location.href='/settings'}},800); return;}}
+   if(s.error){{document.getElementById('state').innerHTML=
+     '<span style="color:var(--bad)">'+s.error+'</span>'; return;}}
+   setTimeout(tick,4000);
+  }}).catch(function(){{setTimeout(tick,5000)}});
+ }} setTimeout(tick,3000);}})();
+</script>"""
+        self._render("Cloudflare-Anmeldung", body, "/settings")
+
+    def cf_login_status(self):
+        """Wird von der Anmeldeseite regelmäßig abgefragt."""
+        if not CF_LOGIN.get("active"):
+            return {"done": False, "error": "Keine Anmeldung aktiv."}
+        if CF_LOGIN.get("done"):
+            return {"done": True}
+        token, status = integrations.device_poll(CF_LOGIN["client_id"], CF_LOGIN["device_code"])
+        if status == "ok" and token:
+            store.set_setting("cf_token", token)
+            store.set_setting("cf_account", "über Cloudflare-Anmeldung")
+            store.set_setting("cf_status", "verknüpft")
+            CF_LOGIN.update({"done": True, "active": False})
+            return {"done": True}
+        if status == "pending":
+            return {"done": False}
+        CF_LOGIN["active"] = False
+        return {"done": False, "error": status}
+
+    # ==================================================================
+    # Dateien einer App (eigenes Dateisystem je Webseite)
+    # ==================================================================
+    def _app_base(self, app):
+        return appsvc.host_data_path(app, app["data_path"])
+
+    def page_app_files(self, app_id):
+        app, connector = self._app_and_connector(app_id)
+        if not app:
+            return self._redirect("/apps", ("err", "App nicht gefunden."))
+        base = self._app_base(app)
+        query = self._query()
+        current = query.get("p", "")
+        edit_file = query.get("edit")
+
+        if edit_file:
+            try:
+                content = files.read_text(base, edit_file)
+            except files.FileError as exc:
+                return self._redirect(f"/apps/{app_id}/files", ("err", str(exc)))
+            parent = "/".join(edit_file.split("/")[:-1])
+            body = f"""<a href="/apps/{app_id}/files?p={ui.esc(parent)}" class="muted">← Dateien</a>
+<h1>{ui.esc(edit_file.split('/')[-1])}</h1>
+<p class="sub">{ui.esc(app['name'])} · <span class="mono">{ui.esc(edit_file)}</span></p>
+{self._app_tabs(app, 'Dateien')}
+<form method="post" action="/apps/{app_id}/files">
+{ui.csrf_input(self.csrf)}<input type="hidden" name="action" value="save">
+<input type="hidden" name="path" value="{ui.esc(edit_file)}">
+<div class="card"><textarea name="content" rows="24" spellcheck="false"
+ style="font-family:var(--mono);font-size:13px">{ui.esc(content)}</textarea>
+<div class="row" style="margin-top:12px">
+<button class="btn primary" type="submit">Speichern</button>
+<a class="btn" href="/apps/{app_id}/files?p={ui.esc(parent)}">Abbrechen</a></div></div></form>"""
+            return self._render(f"{app['name']} — {edit_file}", body, "/apps")
+
+        try:
+            entries = files.listing(base, current)
+        except files.FileError as exc:
+            return self._redirect(f"/apps/{app_id}/files", ("err", str(exc)))
+
+        crumbs = " / ".join(
+            f'<a href="/apps/{app_id}/files?p={ui.esc(p)}">{ui.esc(label)}</a>'
+            for label, p in files.breadcrumbs(current))
+
+        rows = ""
+        if current:
+            parent = "/".join(current.split("/")[:-1])
+            rows += (f'<tr><td colspan="5"><a href="/apps/{app_id}/files?p={ui.esc(parent)}">'
+                     f'⬆ eine Ebene höher</a></td></tr>')
+        for entry in entries:
+            if entry["dir"]:
+                name_html = (f'📁 <a href="/apps/{app_id}/files?p={ui.esc(entry["path"])}">'
+                             f'<b>{ui.esc(entry["name"])}</b></a>')
+                size = "—"
+                actions = ""
+            else:
+                name_html = f'📄 {ui.esc(entry["name"])}'
+                size = sysinfo.human_bytes(entry["size"])
+                actions = (f'<a class="btn sm" href="/apps/{app_id}/files/download?p='
+                           f'{ui.esc(entry["path"])}">Herunterladen</a> ')
+                if entry["text"]:
+                    actions = (f'<a class="btn sm" href="/apps/{app_id}/files?edit='
+                               f'{ui.esc(entry["path"])}">Bearbeiten</a> ') + actions
+            rows += f"""<tr><td>{name_html}</td><td class="mono">{ui.esc(size)}</td>
+<td class="mono">{ui.esc(entry['modified'])}</td><td class="row">{actions}
+<form method="post" action="/apps/{app_id}/files" style="display:inline">
+{ui.csrf_input(self.csrf)}<input type="hidden" name="action" value="delete">
+<input type="hidden" name="path" value="{ui.esc(entry['path'])}">
+<button class="btn sm danger" type="submit"
+ onclick="return confirm('{ui.esc(entry['name'])} wirklich löschen?')">Löschen</button>
+</form></td></tr>"""
+        if not entries and not current:
+            rows += '<tr><td colspan="4" class="muted">Noch keine Dateien.</td></tr>'
+
+        used = files.usage(base)
+        docroot = (connector or {}).get("data", {}).get("container_path", "/data")
+        body = f"""<a href="/apps/{app_id}" class="muted">← {ui.esc(app['name'])}</a>
+<h1>Dateien</h1>
+<p class="sub">Eigenes Dateisystem dieser App · {used['files']} Dateien ·
+{ui.esc(sysinfo.human_bytes(used['bytes']))}</p>
+{self._app_tabs(app, 'Dateien')}
+<div class="card" style="margin-bottom:14px"><dl class="kv">
+<dt>Im Container</dt><dd class="mono">{ui.esc(docroot)}</dd>
+<dt>Auf dem Server</dt><dd class="mono">{ui.esc(base)}</dd>
+</dl></div>
+<div class="card"><div class="between" style="margin-bottom:10px">
+<div class="mono">{crumbs}</div></div>
+<div class="tbl-wrap"><table>
+<tr><th>Name</th><th>Größe</th><th>Geändert</th><th></th></tr>{rows}</table></div></div>
+<div class="grid g3" style="margin-top:14px">
+<div class="card"><h3>Datei hochladen</h3>
+<form method="post" action="/apps/{app_id}/files" enctype="multipart/form-data">
+{ui.csrf_input(self.csrf)}<input type="hidden" name="path" value="{ui.esc(current)}">
+<div class="field"><input type="file" name="file" required></div>
+<button class="btn primary" type="submit">Hochladen</button></form></div>
+<div class="card"><h3>Ordner anlegen</h3>
+<form method="post" action="/apps/{app_id}/files">
+{ui.csrf_input(self.csrf)}<input type="hidden" name="action" value="mkdir">
+<input type="hidden" name="path" value="{ui.esc(current)}">
+<div class="field"><input name="name" placeholder="z. B. bilder" required></div>
+<button class="btn" type="submit">Anlegen</button></form></div>
+<div class="card"><h3>Datei anlegen</h3>
+<form method="post" action="/apps/{app_id}/files">
+{ui.csrf_input(self.csrf)}<input type="hidden" name="action" value="touch">
+<input type="hidden" name="path" value="{ui.esc(current)}">
+<div class="field"><input name="name" placeholder="z. B. seite.html" required></div>
+<button class="btn" type="submit">Anlegen &amp; bearbeiten</button></form></div>
+</div>"""
+        self._render(f"{app['name']} — Dateien", body, "/apps")
+
+    def download_file(self, app_id):
+        app, _ = self._app_and_connector(app_id)
+        if not app:
+            return self._redirect("/apps", ("err", "App nicht gefunden."))
+        try:
+            data, name = files.read_bytes(self._app_base(app), self._query().get("p", ""))
+        except files.FileError as exc:
+            return self._redirect(f"/apps/{app_id}/files", ("err", str(exc)))
+        return self._send(data, 200, "application/octet-stream",
+                          {"Content-Disposition": f'attachment; filename="{name}"'})
+
+    def do_files(self, app_id, form):
+        app, _ = self._app_and_connector(app_id)
+        if not app:
+            return self._redirect("/apps", ("err", "App nicht gefunden."))
+        base = self._app_base(app)
+        action = form.get("action", "")
+        current = form.get("path", "")
+        target = f"/apps/{app_id}/files?p={urllib.parse.quote(current)}"
+        try:
+            if action == "save":
+                files.write_text(base, form.get("path", ""), form.get("content", ""))
+                parent = "/".join(form.get("path", "").split("/")[:-1])
+                return self._redirect(f"/apps/{app_id}/files?p={urllib.parse.quote(parent)}",
+                                      ("ok", "Datei gespeichert."))
+            if action == "delete":
+                files.delete(base, current)
+                parent = "/".join(current.split("/")[:-1])
+                return self._redirect(f"/apps/{app_id}/files?p={urllib.parse.quote(parent)}",
+                                      ("ok", "Gelöscht."))
+            if action == "mkdir":
+                files.make_dir(base, current, form.get("name", ""))
+                return self._redirect(target, ("ok", "Ordner angelegt."))
+            if action == "touch":
+                name = os.path.basename((form.get("name") or "").strip())
+                if not name:
+                    return self._redirect(target, ("err", "Ungültiger Dateiname."))
+                rel = f"{current}/{name}" if current else name
+                if not os.path.exists(files.resolve(base, rel)):
+                    files.write_text(base, rel, "")
+                return self._redirect(f"/apps/{app_id}/files?edit={urllib.parse.quote(rel)}")
+        except files.FileError as exc:
+            return self._redirect(target, ("err", str(exc)))
+        return self._redirect(target)
+
+    def do_upload(self, app_id, content_type):
+        app, _ = self._app_and_connector(app_id)
+        if not app:
+            return self._redirect("/apps", ("err", "App nicht gefunden."))
+        length = int(self.headers.get("Content-Length") or 0)
+        if length > files.MAX_UPLOAD_BYTES + 8192:
+            return self._redirect(f"/apps/{app_id}/files", ("err", "Datei zu groß (max. 200 MB)."))
+        body = self.rfile.read(length) if length else b""
+        try:
+            fields, uploads = files.parse_multipart(body, content_type)
+        except files.FileError as exc:
+            return self._redirect(f"/apps/{app_id}/files", ("err", str(exc)))
+        if not self._check_csrf(fields):
+            return self._redirect(f"/apps/{app_id}/files",
+                                  ("err", "Sicherheits-Token ungültig."))
+        current = fields.get("path", "")
+        target = f"/apps/{app_id}/files?p={urllib.parse.quote(current)}"
+        if not uploads:
+            return self._redirect(target, ("err", "Keine Datei ausgewählt."))
+        try:
+            saved = [files.save_upload(self._app_base(app), current, name, data)
+                     for _field, name, data in uploads if name]
+        except files.FileError as exc:
+            return self._redirect(target, ("err", str(exc)))
+        return self._redirect(target, ("ok", f"Hochgeladen: {', '.join(saved)}"))
 
 
 def serve():

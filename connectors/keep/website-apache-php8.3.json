@@ -1,0 +1,94 @@
+{
+  "id": "website-apache-php8.3",
+  "group": "website-apache",
+  "name": "Webseite (Apache + PHP)",
+  "version": "8.3",
+  "category": "Web",
+  "icon": "🅰️",
+  "summary": "Apache mit PHP 8.3 — eigene Domain, eigenes Dateisystem je Webseite.",
+  "description": "Apache-Webserver mit PHP 8.3 für eine einzelne Webseite. Jede Installation ist völlig eigenständig: eigene Domain, eigener Container und ein eigenes Dateisystem, das du unter „Dateien“ direkt im Browser verwaltest. Für mehrere Webseiten installierst du diese App einfach mehrfach.",
+  "runtime": "docker",
+  "image": "php:8.3-apache",
+  "container_port": 80,
+  "protocol": "tcp",
+  "http": true,
+  "data": {
+    "container_path": "/var/www/html",
+    "label": "Webseiten-Dateien (DocumentRoot)"
+  },
+  "env": {},
+  "init_files": [
+    {
+      "path": "index.php",
+      "content": "<!doctype html>\n<html lang=\"de\">\n<meta charset=\"utf-8\">\n<title>{index_title}</title>\n<h1>{index_title}</h1>\n<p>Diese Webseite läuft über weblab (Apache + PHP <?= PHP_VERSION ?>).</p>\n<p>Bearbeite diese Datei im Panel unter <b>Dateien</b>.</p>\n"
+    }
+  ],
+  "fields": {
+    "required": [
+      {
+        "key": "index_title",
+        "label": "Titel der Startseite",
+        "type": "string",
+        "default": "Meine Webseite",
+        "required": true,
+        "help": "Wird beim Anlegen in die index.php geschrieben — später frei änderbar.",
+        "target": {
+          "kind": "none"
+        }
+      }
+    ],
+    "specific": [
+      {
+        "key": "php_memory_limit",
+        "label": "PHP Speicherlimit",
+        "type": "select",
+        "options": [
+          "128M",
+          "256M",
+          "512M",
+          "1024M"
+        ],
+        "default": "256M",
+        "target": {
+          "kind": "file_line",
+          "file": "/usr/local/etc/php/conf.d/weblab.ini",
+          "prefix": "memory_limit = "
+        }
+      },
+      {
+        "key": "php_upload_max",
+        "label": "Max. Upload-Größe",
+        "type": "select",
+        "options": [
+          "8M",
+          "32M",
+          "128M",
+          "512M"
+        ],
+        "default": "32M",
+        "target": {
+          "kind": "file_line",
+          "file": "/usr/local/etc/php/conf.d/weblab.ini",
+          "prefix": "upload_max_filesize = "
+        }
+      },
+      {
+        "key": "php_display_errors",
+        "label": "PHP-Fehler anzeigen",
+        "type": "select",
+        "options": [
+          "Off",
+          "On"
+        ],
+        "default": "Off",
+        "help": "Im Betrieb ausgeschaltet lassen — Fehlermeldungen verraten interne Details.",
+        "target": {
+          "kind": "file_line",
+          "file": "/usr/local/etc/php/conf.d/weblab.ini",
+          "prefix": "display_errors = "
+        }
+      }
+    ]
+  },
+  "advanced": {}
+}

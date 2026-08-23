@@ -123,7 +123,8 @@ class Cloudflare:
         resp = http_json(f"{CF_API}/zones/{zone}/dns_records?per_page=200", headers=self.headers)
         return resp.get("result") or [], None
 
-    def set_record(self, domain, name, content, rtype="A", proxied=False, ttl=120):
+    def set_record(self, domain, name, content, rtype="A", proxied=False, ttl=120,
+                   priority=None, comment=None):
         """Record anlegen/ersetzen (gleicher Name+Typ wird überschrieben)."""
         zone, err = self.zone_id(domain)
         if not zone:
@@ -134,13 +135,33 @@ class Cloudflare:
         for record in existing.get("result") or []:
             http_json(f"{CF_API}/zones/{zone}/dns_records/{record['id']}",
                       method="DELETE", headers=self.headers)
-        resp = http_json(f"{CF_API}/zones/{zone}/dns_records", method="POST", headers=self.headers,
-                         data={"type": rtype, "name": name, "content": content,
-                               "ttl": ttl, "proxied": proxied})
+        payload = {"type": rtype, "name": name, "content": content, "ttl": ttl}
+        if rtype in ("A", "AAAA", "CNAME"):
+            payload["proxied"] = proxied
+        if priority is not None:
+            payload["priority"] = int(priority)
+        if comment:
+            payload["comment"] = comment[:100]
+        resp = http_json(f"{CF_API}/zones/{zone}/dns_records", method="POST",
+                         headers=self.headers, data=payload)
         if resp.get("success"):
             return True, None
         errors = resp.get("errors") or []
         return False, (errors[0].get("message") if errors else "Unbekannter Fehler")
+
+    def zones(self):
+        """Alle Domains (Zonen) des verknüpften Kontos."""
+        resp = http_json(f"{CF_API}/zones?per_page=200", headers=self.headers)
+        return [{"id": z["id"], "name": z["name"], "status": z.get("status", "")}
+                for z in (resp.get("result") or [])]
+
+    def verify(self):
+        """Prüft, ob der gespeicherte Token gültig ist."""
+        resp = http_json(f"{CF_API}/user/tokens/verify", headers=self.headers)
+        if resp.get("success"):
+            return True, (resp.get("result") or {}).get("status", "active")
+        errors = resp.get("errors") or []
+        return False, (errors[0].get("message") if errors else "Token ungültig")
 
     def delete_record(self, domain, record_id):
         zone, err = self.zone_id(domain)
@@ -221,3 +242,135 @@ def write_caddyfile_safe(manage_domain, app_routes, email=None):
         return True, None
     except Exception as exc:  # noqa: BLE001 - bewusst: Proxy-Fehler nur melden
         return False, str(exc)
+
+
+# --------------------------------------------------------------------------
+# Cloudflare-Konto verknüpfen: Anmeldung -> weblab erzeugt selbst einen Token
+# --------------------------------------------------------------------------
+# Cloudflare bietet keinen OAuth-Login für fremde Anwendungen an. Der offizielle
+# Weg, einen Token OHNE Handarbeit im Dashboard zu erhalten, ist die einmalige
+# Anmeldung mit Konto-E-Mail + Konto-Schlüssel: damit legt weblab über die API
+# einen eng begrenzten Token (nur DNS) an. Der Konto-Schlüssel wird dabei NUR für
+# diesen einen Aufruf benutzt und niemals gespeichert.
+DNS_PERMISSIONS = ("DNS Write", "Zone Read")
+FALLBACK_PERMISSION_IDS = {
+    "DNS Write": "4755a26eedb94da69e1066d98aa820be",
+    "Zone Read": "c8fed203ed3043cba015a93ad1616f1f",
+}
+
+
+def _account_headers(email, global_key):
+    return {"X-Auth-Email": email.strip(), "X-Auth-Key": global_key.strip()}
+
+
+def permission_group_ids(email, global_key):
+    """IDs der benötigten Berechtigungen ermitteln (mit bekannten Werten als Rückfall)."""
+    resp = http_json(f"{CF_API}/user/tokens/permission_groups",
+                     headers=_account_headers(email, global_key))
+    found = {}
+    for group in resp.get("result") or []:
+        name = group.get("name")
+        if name in DNS_PERMISSIONS and "zone" in " ".join(group.get("scopes") or []):
+            found[name] = group.get("id")
+    for name in DNS_PERMISSIONS:
+        found.setdefault(name, FALLBACK_PERMISSION_IDS[name])
+    return found, (resp.get("errors") or [])
+
+
+def link_account(email, global_key, label="weblab"):
+    """Erzeugt einen auf DNS beschränkten Token. Rückgabe: (token, fehler)."""
+    email = (email or "").strip()
+    global_key = (global_key or "").strip()
+    if not email or not global_key:
+        return None, "E-Mail und Konto-Schlüssel werden benötigt."
+
+    groups, errors = permission_group_ids(email, global_key)
+    if errors and not groups:
+        return None, errors[0].get("message", "Anmeldung fehlgeschlagen.")
+
+    payload = {
+        "name": f"{label}-dns"[:32],
+        "policies": [{
+            "effect": "allow",
+            "resources": {"com.cloudflare.api.account.zone.*": "*"},
+            "permission_groups": [{"id": groups[name]} for name in DNS_PERMISSIONS],
+        }],
+    }
+    resp = http_json(f"{CF_API}/user/tokens", method="POST",
+                     headers=_account_headers(email, global_key), data=payload)
+    if resp.get("success"):
+        token = (resp.get("result") or {}).get("value")
+        if token:
+            return token, None
+        return None, "Cloudflare hat keinen Token zurückgegeben."
+    errors = resp.get("errors") or []
+    message = errors[0].get("message") if errors else "Token konnte nicht erstellt werden."
+    code = errors[0].get("code") if errors else None
+    if code == 9103:
+        message = "E-Mail oder Konto-Schlüssel stimmen nicht."
+    return None, message
+
+
+# --------------------------------------------------------------------------
+# Cloudflare-Anmeldung per Geräte-Code (OAuth Device Flow)
+# --------------------------------------------------------------------------
+# Bequemster Weg: weblab zeigt einen kurzen Code, du meldest dich bei Cloudflare
+# an und bestätigst — weblab holt sich den Zugang danach selbst ab. Es wird kein
+# Kontopasswort und kein Konto-Schlüssel eingegeben.
+# Voraussetzung: eine OAuth-Client-ID (einmalig im Cloudflare-Konto anlegen).
+CF_DEVICE_AUTH = "https://dash.cloudflare.com/oauth2/device/auth"
+CF_TOKEN_URL = "https://dash.cloudflare.com/oauth2/token"
+CF_DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code"
+CF_SCOPES = "dns_records:read dns_records:edit zone:read offline_access"
+
+
+def http_form(url, data, timeout=25):
+    """POST mit application/x-www-form-urlencoded (OAuth-Endpunkte erwarten das)."""
+    body = urllib.parse.urlencode(data).encode()
+    req = urllib.request.Request(url, data=body, method="POST")
+    req.add_header("Content-Type", "application/x-www-form-urlencoded")
+    req.add_header("Accept", "application/json")
+    req.add_header("User-Agent", UA)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return json.loads(resp.read().decode("utf-8", "replace") or "{}")
+    except urllib.error.HTTPError as exc:
+        try:
+            return json.loads(exc.read().decode("utf-8", "replace"))
+        except (json.JSONDecodeError, ValueError):
+            return {"error": f"http_{exc.code}"}
+    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, OSError) as exc:
+        return {"error": str(exc)}
+
+
+def device_start(client_id, scopes=CF_SCOPES):
+    """Anmeldung starten. Rückgabe: (info, fehler) mit user_code/verification_uri."""
+    resp = http_form(CF_DEVICE_AUTH, {"client_id": client_id, "scope": scopes})
+    if resp.get("device_code"):
+        return {
+            "device_code": resp["device_code"],
+            "user_code": resp.get("user_code", ""),
+            "verification_uri": resp.get("verification_uri_complete")
+            or resp.get("verification_uri", "https://dash.cloudflare.com"),
+            "interval": int(resp.get("interval", 5)),
+            "expires_in": int(resp.get("expires_in", 900)),
+        }, None
+    return None, resp.get("error_description") or resp.get("error") or "Anmeldung nicht möglich."
+
+
+def device_poll(client_id, device_code):
+    """Einmal nachfragen, ob die Anmeldung bestätigt wurde.
+
+    Rückgabe: (token, status) — status ist 'pending', 'ok' oder eine Fehlermeldung.
+    """
+    resp = http_form(CF_TOKEN_URL, {
+        "grant_type": CF_DEVICE_GRANT,
+        "device_code": device_code,
+        "client_id": client_id,
+    })
+    if resp.get("access_token"):
+        return resp["access_token"], "ok"
+    error = resp.get("error", "")
+    if error in ("authorization_pending", "slow_down"):
+        return None, "pending"
+    return None, (resp.get("error_description") or error or "Anmeldung fehlgeschlagen.")

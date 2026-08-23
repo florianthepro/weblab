@@ -22,7 +22,7 @@ unter **`https://deine-domain`**.
 | **Dashboard** | Auslastung des Servers (CPU/RAM/Platte) + Verbrauch je App |
 | **Apps** | Katalog (installieren) und installierte Apps (verwalten) |
 | **Netzwerk** | Schnittstellen, **Subnetze anlegen/verwalten**, alle belegten Ports |
-| **DNS** | DNS-Einträge der Domain (über Cloudflare) |
+| **DNS** | DNS-Einträge (Cloudflare-Konto verknüpfen → Einträge entstehen automatisch) |
 | **Speicher** | Laufwerke, Belegung, Datenpfade der Apps |
 | **Benutzer** | Konten für die Oberfläche |
 | **Einstellungen** | Domain, Cloudflare-Token, Katalog |
@@ -36,10 +36,25 @@ Beim Installieren werden nur die **Pflichtfelder** abgefragt (z. B. RAM bei Mine
 **Basis-Angaben**, die für alle Apps gleich sind: Name, Domain, intern/extern/spezifisch, Port,
 Ablageort (Docker/Gerät), Datenlaufwerk, CPU und RAM.
 
+Unter **App → Dateien** hat jede Installation ihr **eigenes Dateisystem** im Browser:
+durchsuchen, Ordner anlegen, hochladen, Textdateien bearbeiten, löschen, herunterladen.
+Damit lassen sich Apache/Nginx **mehrfach** installieren — je Webseite eine eigene Domain und
+ein eigener Dateibereich.
+
 Unter **App → Einstellungen** gibt es drei Bereiche:
 - **Basis** — Name, Domain, Port, Sichtbarkeit, Laufwerk, CPU/RAM
 - **Spezifisch** — was der Connector definiert (bei Minecraft z. B. MOTD, Spielmodus)
 - **Erweitert** — z. B. **Plugins**: Quelle wählen, suchen, hinzufügen, Liste mit Löschen
+
+### Enthaltene Apps
+Minecraft (Java), Webseite (Apache + PHP), Webseite (Nginx), Mailserver, PostgreSQL.
+
+## Cloudflare verknüpfen
+Unter **Einstellungen → Cloudflare-Konto** verknüpfst du dein Konto — **du musst keinen Token
+selbst anlegen**. Entweder per **Anmeldung bei Cloudflare** (weblab zeigt einen Code, du
+bestätigst ihn im Cloudflare-Konto) oder per einmaliger **Konto-Anmeldung**, aus der weblab
+selbst einen Token erzeugt, der nur DNS ändern darf. Danach legt weblab die DNS-Einträge
+jeder App automatisch an (Webseiten: A-Record; Mailserver: A, MX, SPF, DMARC).
 
 Details zum Connector-Format: [`connectors/README.md`](connectors/README.md).
 

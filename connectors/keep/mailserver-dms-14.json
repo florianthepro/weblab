@@ -1,0 +1,215 @@
+{
+  "id": "mailserver-dms-14",
+  "group": "mailserver-dms",
+  "name": "Mailserver",
+  "version": "14",
+  "category": "Mail",
+  "icon": "✉️",
+  "summary": "Vollwertiger Mailserver (docker-mailserver): SMTP, IMAP, Spam- und Virenfilter.",
+  "description": "docker-mailserver — ein ausgereifter, komplett vorkonfigurierter Mailserver (Postfix + Dovecot + Rspamd/SpamAssassin + ClamAV + Fail2ban). Sichere Standardeinstellungen. Wichtig: Die Ports 25/143/465/587/993 stehen fest, weil MX-Einträge und Mailprogramme darauf angewiesen sind — dieser Connector kann daher nur EINMAL installiert werden.",
+  "runtime": "docker",
+  "image": "mailserver/docker-mailserver:14",
+  "container_port": 25,
+  "protocol": "tcp",
+  "http": false,
+  "singleton": true,
+  "default_exposure": "external",
+  "fixed_ports": [
+    {
+      "port": 25,
+      "protocol": "tcp",
+      "name": "SMTP (Server zu Server)"
+    },
+    {
+      "port": 143,
+      "protocol": "tcp",
+      "name": "IMAP (STARTTLS)"
+    },
+    {
+      "port": 465,
+      "protocol": "tcp",
+      "name": "SMTP (implizites TLS)"
+    },
+    {
+      "port": 587,
+      "protocol": "tcp",
+      "name": "Submission (STARTTLS)"
+    },
+    {
+      "port": 993,
+      "protocol": "tcp",
+      "name": "IMAP (TLS)"
+    }
+  ],
+  "data": {
+    "container_path": "/var/mail",
+    "label": "Postfächer"
+  },
+  "env": {
+    "ENABLE_FAIL2BAN": "1",
+    "ENABLE_RSPAMD": "1",
+    "ENABLE_OPENDKIM": "1",
+    "ENABLE_OPENDMARC": "1",
+    "ENABLE_POP3": "0",
+    "ONE_DIR": "1",
+    "PERMIT_DOCKER": "none",
+    "SSL_TYPE": "letsencrypt",
+    "SPOOF_PROTECTION": "1",
+    "POSTMASTER_ADDRESS": "postmaster@localhost"
+  },
+  "fields": {
+    "required": [
+      {
+        "key": "mail_domain",
+        "label": "Mail-Domain",
+        "type": "string",
+        "required": true,
+        "help": "Die Domain hinter dem @ — z. B. example.com",
+        "target": {
+          "kind": "none"
+        }
+      },
+      {
+        "key": "mail_hostname",
+        "label": "Hostname des Servers",
+        "type": "string",
+        "default": "mail",
+        "required": true,
+        "help": "Wird zu <hostname>.<domain>, z. B. mail.example.com — muss als A-Record existieren.",
+        "target": {
+          "kind": "none"
+        }
+      },
+      {
+        "key": "first_account",
+        "label": "Erstes Postfach",
+        "type": "string",
+        "default": "postmaster",
+        "required": true,
+        "help": "Wird als <name>@<domain> angelegt.",
+        "target": {
+          "kind": "none"
+        }
+      },
+      {
+        "key": "first_password",
+        "label": "Passwort des Postfachs",
+        "type": "password",
+        "required": true,
+        "generate": true,
+        "help": "Leer lassen = sicheres Passwort wird erzeugt und danach angezeigt.",
+        "target": {
+          "kind": "none"
+        }
+      }
+    ],
+    "specific": [
+      {
+        "key": "enable_clamav",
+        "label": "Virenscanner (ClamAV)",
+        "type": "select",
+        "options": [
+          "0",
+          "1"
+        ],
+        "option_labels": {
+          "0": "aus (spart ~1 GB RAM)",
+          "1": "an"
+        },
+        "default": "0",
+        "help": "ClamAV braucht dauerhaft rund 1 GB Arbeitsspeicher.",
+        "target": {
+          "kind": "env",
+          "name": "ENABLE_CLAMAV"
+        }
+      },
+      {
+        "key": "enable_rspamd",
+        "label": "Spamfilter (Rspamd)",
+        "type": "select",
+        "options": [
+          "1",
+          "0"
+        ],
+        "option_labels": {
+          "1": "an (empfohlen)",
+          "0": "aus"
+        },
+        "default": "1",
+        "target": {
+          "kind": "env",
+          "name": "ENABLE_RSPAMD"
+        }
+      },
+      {
+        "key": "enable_pop3",
+        "label": "POP3 zusätzlich anbieten",
+        "type": "select",
+        "options": [
+          "0",
+          "1"
+        ],
+        "option_labels": {
+          "0": "aus (nur IMAP)",
+          "1": "an"
+        },
+        "default": "0",
+        "target": {
+          "kind": "env",
+          "name": "ENABLE_POP3"
+        }
+      },
+      {
+        "key": "postmaster",
+        "label": "Postmaster-Adresse",
+        "type": "string",
+        "default": "postmaster@localhost",
+        "target": {
+          "kind": "env",
+          "name": "POSTMASTER_ADDRESS"
+        }
+      }
+    ]
+  },
+  "advanced": {},
+  "notes": [
+    "Viele Anbieter sperren ausgehenden Port 25 — vorher beim Hoster freischalten lassen.",
+    "Nötige DNS-Einträge: A für mail.<domain>, MX auf mail.<domain>, SPF (TXT), DKIM (TXT) und DMARC (TXT).",
+    "Der PTR-/Reverse-Eintrag der Server-IP muss auf mail.<domain> zeigen — das stellt der Hoster ein.",
+    "Der DKIM-Schlüssel wird beim ersten Start erzeugt; den TXT-Eintrag danach im Reiter DNS ergänzen."
+  ],
+  "hostname_template": "{mail_hostname}.{mail_domain}",
+  "post_install": {
+    "wait_for": "/tmp/docker-mailserver/postfix-accounts.cf",
+    "exec": [
+      "setup email add {first_account}@{mail_domain} '{first_password}' || true"
+    ]
+  },
+  "dns_records": [
+    {
+      "type": "A",
+      "name": "{mail_hostname}.{mail_domain}",
+      "content": "{server_ip}",
+      "comment": "Adresse des Mailservers"
+    },
+    {
+      "type": "MX",
+      "name": "{mail_domain}",
+      "content": "{mail_hostname}.{mail_domain}",
+      "priority": 10,
+      "comment": "Wohin Mail für die Domain geht"
+    },
+    {
+      "type": "TXT",
+      "name": "{mail_domain}",
+      "content": "v=spf1 mx -all",
+      "comment": "SPF: nur dieser Server darf für die Domain senden"
+    },
+    {
+      "type": "TXT",
+      "name": "_dmarc.{mail_domain}",
+      "content": "v=DMARC1; p=quarantine; rua=mailto:postmaster@{mail_domain}",
+      "comment": "DMARC-Richtlinie"
+    }
+  ]
+}

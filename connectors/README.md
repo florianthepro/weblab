@@ -52,3 +52,24 @@ plus Gesamtliste mit Löschen-Funktion.
   "advanced": {"plugins": {...}}
 }
 ```
+
+---
+
+## Weitere Felder (seit Version 1.1)
+
+| Feld | Zweck | Beispiel |
+|---|---|---|
+| `init_files` | Startdateien, die im Datenverzeichnis angelegt werden (nur wenn nicht vorhanden). Platzhalter: `{app_name}`, `{domain}` und alle Feldwerte. | `index.html` einer Webseite |
+| `fixed_ports` | Ports, die **fest** durchgereicht werden (Host = Container). Nötig, wenn Clients feste Ports erwarten. | Mail: 25, 143, 465, 587, 993 |
+| `singleton` | `true` = App kann nur **einmal** installiert werden. | Mailserver |
+| `hostname_template` | Hostname des Containers. | `{mail_hostname}.{mail_domain}` |
+| `post_install` | `wait_for` (Datei abwarten) + `exec` (Kommandos im Container). | erstes Postfach anlegen |
+| `dns_records` | DNS-Einträge, die weblab automatisch anlegt (bei verknüpftem Cloudflare-Konto). Platzhalter u. a. `{server_ip}`. | MX, SPF, DMARC |
+| `notes` | Hinweise, die auf der App-Seite erscheinen. | „Port 25 beim Hoster freischalten“ |
+| `default_exposure` | Vorbelegung der Erreichbarkeit. | `internal` bei Datenbanken |
+
+## Mehrfach installieren
+Ohne `singleton` lässt sich ein Connector **beliebig oft** installieren. Jede Installation ist
+eigenständig: eigener Container, eigener Port, eigene Domain und ein **eigenes Datenverzeichnis**,
+das im Panel unter **App → Dateien** verwaltet wird. So entstehen mehrere Webseiten aus demselben
+Apache- oder Nginx-Connector.
