@@ -12,7 +12,7 @@ aus (z. B. RAM bei einem Minecraft-Server) und die App läuft — sauber in Dock
 1. `sudo bash software/run.sh` auf frischem Ubuntu 24.04 LTS.
 2. `http://<server-ip>` öffnen → **Setup: Admin + Passwort + Verwaltungs-Domain**
    (deren `@`-Record auf die IP zeigt), optional Cloudflare-Token → **Ladebalken**.
-3. Danach `https://<domain>`: Dashboard, Apps, Netzwerk, DNS, Speicher, Benutzer, Einstellungen.
+3. Danach `https://<domain>`: Dashboard, Apps, Netzwerk, Speicher, Benutzer, Einstellungen.
 
 ## Aufbau
 
@@ -69,7 +69,7 @@ Der Mailserver ist **einmalig** — seine Ports (25/143/465/587/993) stehen fest
   extern, per „Erweitert“ auch intern, Schnittstellen und Subnetze).
 - **Speicher** — Dateisysteme, Laufwerke, Datenpfade und Belegung je App.
 - **Benutzer** — Konten anlegen/löschen, eigenes Passwort ändern.
-- **Einstellungen** — Domain, Server-IP, Cloudflare-Konto, Katalog, Status.
+- **Einstellungen** — Domain, Server-IP, Katalog, Status.
 
 ## Grenzen
 - Auf Desktop ausgelegt, aber responsiv.
