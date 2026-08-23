@@ -9,7 +9,8 @@ aus (z. B. RAM bei einem Minecraft-Server) und die App läuft — sauber in Dock
 1. **Sicherheit**  2. Features  3. Bedienbarkeit. (Frei/OSS.)
 
 ## Ablauf
-1. `sudo bash software/run.sh` auf frischem Ubuntu 24.04 LTS.
+1. `sudo bash -c "$(curl -fsSL .../install.sh)"` — erkennt selbst, ob installiert,
+   aktualisiert oder neu aufgesetzt wird.
 2. `http://<server-ip>` öffnen → **Setup: Admin + Passwort + Verwaltungs-Domain**
    (deren `@`-Record auf die IP zeigt), optional Cloudflare-Token → **Ladebalken**.
 3. Danach `https://<domain>`: Dashboard, Apps, Netzwerk, Speicher, Benutzer, Einstellungen.

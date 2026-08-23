@@ -4,30 +4,33 @@ Aus einem frischen **Ubuntu 24.04 LTS** wird mit **einem Kommando** ein gehärte
 Weboberfläche: Apps (Minecraft, Webseiten, Datenbanken …) aus einem **Katalog** installieren,
 Domains und Ports vergeben, Ressourcen, Netzwerk, Speicher und Benutzer verwalten.
 
-## Installation (als root)
+## Installation
+
+Ein Befehl — für alles:
 
 ```bash
-git clone https://github.com/florianthepro/weblab && sudo bash weblab/software/run.sh
+sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/florianthepro/weblab/main/install.sh)"
 ```
 
-Danach **`http://<server-ip>`** öffnen: Der Assistent fragt **Admin + Passwort +
+Er sieht nach, was auf dem Server liegt:
+
+| Vorgefunden | Was passiert |
+|---|---|
+| **Nichts** | weblab wird installiert |
+| **Fremde Software** (Cockpit, Apache/Nginx, anderes Panel) | fragt, ob sie vorher entfernt wird |
+| **weblab** | fragt: **Aktualisieren** oder **Neu installieren** |
+
+**Aktualisieren** vergleicht mit GitHub und ersetzt nur die Programmdateien von weblab —
+Apps, Webseiten und Datenbanken unter `/var/lib/weblab` bleiben unangetastet. Weicht eine
+Kerndatei ab, wird sie ebenfalls wieder hergestellt.
+**Neu installieren** setzt den Server zurück; Apps und Daten gehen dabei verloren.
+
+Ohne Rückfragen: `--update`, `--reinstall` oder `--install`, jeweils mit `--yes`.
+Dieselbe Prüfung läuft regelmäßig von selbst (systemd-Timer).
+
+Nach der Installation **`http://<server-ip>`** öffnen: Der Assistent fragt **Admin + Passwort +
 Verwaltungs-Domain** (deren `@`-Record auf diese IP zeigt). Anschließend läuft die Oberfläche
 unter **`https://deine-domain`**; das DNS-Konto verbindest du danach unter *Netzwerk*.
-
-### Von Grund auf neu (Server bereinigen)
-
-Läuft auf dem Ubuntu schon anderes (Cockpit, Apache/Nginx, ein anderes Panel …) oder eine
-frühere weblab-Installation, bringt dieses Kommando den Server zuerst in einen **sauberen
-Zustand** — es entfernt konkurrierende Software, alle Docker-Container/-Volumes und alte
-weblab-Daten — und installiert dann frisch:
-
-```bash
-rm -rf weblab && git clone https://github.com/florianthepro/weblab \
-  && sudo bash weblab/software/fresh-install.sh
-```
-
-Es zeigt an, was gefunden wurde, und fragt einmal nach (`JA`). Für einen Lauf ohne Rückfrage
-`sudo FORCE=1 bash weblab/software/fresh-install.sh`. **Achtung:** löscht vorhandene Daten.
 
 ## Oberfläche
 
@@ -43,9 +46,9 @@ Tiefere Angaben stecken in aufklappbaren Bereichen; Fehler erscheinen als Banner
 jeder Seite bleibt, bis man es schließt.
 
 ## Updates
-weblab hält sich im Hintergrund selbst aktuell (systemd-Timer). Sichtbar ist davon nur,
-was zählt: neue Apps im Katalog sind mit **neu** markiert, und bei installierten Apps
-erscheint **Update**, wenn es eine neuere Version gibt.
+weblab vergleicht sich regelmäßig mit GitHub und aktualisiert sich selbst — Daten bleiben.
+Sichtbar ist davon nur, was zählt: neue Apps im Katalog sind mit **neu** markiert, und bei
+installierten Apps erscheint **Update**, wenn es eine neuere Version gibt.
 
 ## VPN je App
 Unter **Netzwerk → VPN**:

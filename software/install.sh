@@ -56,8 +56,10 @@ if command -v git >/dev/null 2>&1 && git -C "$REPO_ROOT" rev-parse --short HEAD 
 fi
 
 echo "== Auto-Update (Timer) =="
-cp "$HERE/update.sh" "$TARGET/update.sh"
-chmod +x "$TARGET/update.sh"
+if [ ! -d /opt/weblab/src/.git ] && [ -d "$REPO_ROOT/.git" ] && [ "$REPO_ROOT" != /opt/weblab/src ]; then
+  rm -rf /opt/weblab/src && cp -r "$REPO_ROOT" /opt/weblab/src
+fi
+rm -f "$TARGET/update.sh"          # Rest früherer Versionen
 cp "$HERE/weblab-update.service" /etc/systemd/system/weblab-update.service
 cp "$HERE/weblab-update.timer" /etc/systemd/system/weblab-update.timer
 
