@@ -15,6 +15,21 @@ Verwaltungs-Domain** (deren `@`-Record auf diese IP zeigt), richtet optional per
 Cloudflare-Token das DNS ein und zeigt einen Ladebalken. Anschließend läuft die Oberfläche
 unter **`https://deine-domain`**.
 
+### Von Grund auf neu (Server bereinigen)
+
+Läuft auf dem Ubuntu schon anderes (Cockpit, Apache/Nginx, ein anderes Panel …) oder eine
+frühere weblab-Installation, bringt dieses Kommando den Server zuerst in einen **sauberen
+Zustand** — es entfernt konkurrierende Software, alle Docker-Container/-Volumes und alte
+weblab-Daten — und installiert dann frisch:
+
+```bash
+rm -rf weblab && git clone https://github.com/florianthepro/weblab \
+  && sudo bash weblab/software/fresh-install.sh
+```
+
+Es zeigt an, was gefunden wurde, und fragt einmal nach (`JA`). Für einen Lauf ohne Rückfrage
+`sudo FORCE=1 bash weblab/software/fresh-install.sh`. **Achtung:** löscht vorhandene Daten.
+
 ## Oberfläche
 
 | Bereich | Inhalt |
@@ -22,7 +37,7 @@ unter **`https://deine-domain`**.
 | **Dashboard** | Auslastung des Servers (CPU/RAM/Platte) + Verbrauch je App |
 | **Apps** | Katalog (installieren) und installierte Apps (verwalten) |
 | **Netzwerk** | DNS-Konto + Einträge, offene Ports (extern; erweiterbar auf intern/Subnetze) |
-| **Speicher** | Laufwerke, Belegung, Datenpfade der Apps |
+| **Speicher** | Laufwerke (physisch) mit Belegung je Disk und welche App wie viel belegt |
 | **Benutzer** | Konten für die Oberfläche |
 | **Einstellungen** | Domain, Server-IP, Katalog |
 
@@ -35,10 +50,12 @@ Beim Installieren werden nur die **Pflichtfelder** abgefragt (z. B. RAM bei Mine
 **Basis-Angaben**, die für alle Apps gleich sind: Name, Domain, intern/extern/spezifisch, Port,
 Ablageort (Docker/Gerät), Datenlaufwerk, CPU und RAM.
 
-Unter **App → Dateien** hat jede Installation ihr **eigenes Dateisystem** im Browser:
-durchsuchen, Ordner anlegen, hochladen, Textdateien bearbeiten, löschen, herunterladen.
-Damit lassen sich Apache/Nginx **mehrfach** installieren — je Webseite eine eigene Domain und
-ein eigener Dateibereich.
+Webseiten (Apache/Nginx) und der Mailserver haben eine eigene **Verwaltungs-Adresse**
+(standardmäßig `apache.<domain>` / `nginx.<domain>` / `mail.<domain>`). Dort öffnet sich das
+**Dashboard mit Dateimanager** dieser App — durchsuchen, Ordner anlegen, hochladen, Textdateien
+bearbeiten, löschen. Die Seite selbst läuft unter ihrer eigenen Domain (`domain.com` oder
+`<name>.domain.com`). So lassen sich Apache/Nginx **mehrfach** installieren — je Webseite eine
+eigene Domain, eine eigene Verwaltungs-Adresse und ein eigener Dateibereich.
 
 Unter **App → Einstellungen** gibt es drei Bereiche:
 - **Basis** — Name, Domain, Port, Sichtbarkeit, Laufwerk, CPU/RAM

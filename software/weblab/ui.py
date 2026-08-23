@@ -423,11 +423,10 @@ GLOBAL_JS = """<script>
   function set(t){if(body)body.textContent=t||DEF;}
   function info(e){var el=e.target.closest('[data-info]');
     return el&&el.getAttribute('data-info')?el.getAttribute('data-info'):null;}
-  // Anklicken/Auswählen eines Feldes öffnet das Overlay und zeigt dessen Hinweis.
-  document.addEventListener('focusin',function(e){var t=info(e);if(t===null)return;
-    if(!shown()){panel.classList.add('show');persist(true);} set(t);});
-  // Überfahren mit der Maus aktualisiert den Hinweis nur, wenn das Overlay offen ist.
-  document.addEventListener('mouseover',function(e){if(!shown())return;var t=info(e);if(t!==null)set(t);});
+  // Standardmäßig aus: Hinweise aktualisieren nur, wenn das Overlay per Knopf geöffnet wurde.
+  function upd(e){if(!shown())return;var t=info(e);if(t!==null)set(t);}
+  document.addEventListener('focusin',upd);
+  document.addEventListener('mouseover',upd);
  }
  // Gesperrte Felder freischalten
  document.querySelectorAll('[data-unlock]').forEach(function(b){

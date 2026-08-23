@@ -37,9 +37,11 @@ def http_json(url, method="GET", headers=None, data=None, timeout=25):
         return {"success": False, "errors": [{"message": str(exc)}]}
 
 
-def render_caddyfile(manage_domain, app_routes, email=None):
-    """app_routes: [{'domain':..., 'port':...}] — nur Apps mit Domain und http=true."""
+def render_caddyfile(manage_domain, app_routes, email=None, panel_hosts=None):
+    """app_routes: [{'domain':..., 'port':...}] — nur Apps mit Domain und http=true.
+    panel_hosts: zusätzliche Hostnamen (App-Verwaltungs-Subdomains), die auf das Panel zeigen."""
     email = email or (f"admin@{manage_domain}" if manage_domain else "")
+    panel_hosts = [h for h in (panel_hosts or []) if h]
     out = ["{"]
     if email:
         out.append(f"\temail {email}")
@@ -49,7 +51,8 @@ def render_caddyfile(manage_domain, app_routes, email=None):
     out.append("# Zugriff über die IP (vor/ohne Domain) und HTTP->HTTPS-Umleitung")
     out.append("http:// {")
     if manage_domain:
-        hosts = " ".join([manage_domain] + [r["domain"] for r in app_routes if r.get("domain")])
+        hosts = " ".join([manage_domain] + panel_hosts
+                         + [r["domain"] for r in app_routes if r.get("domain")])
         out.append(f"\t@named host {hosts}")
         out.append("\thandle @named {")
         out.append("\t\tredir https://{host}{uri} permanent")
@@ -61,6 +64,9 @@ def render_caddyfile(manage_domain, app_routes, email=None):
     if manage_domain:
         out += ["", "# Verwaltungsoberfläche", f"{manage_domain} {{",
                 "\tencode gzip zstd", f"\treverse_proxy 127.0.0.1:{PANEL_PORT}", "}"]
+    for host in panel_hosts:
+        out += ["", f"# App-Verwaltung: {host}", f"{host} {{",
+                "\tencode gzip zstd", f"\treverse_proxy 127.0.0.1:{PANEL_PORT}", "}"]
     for route in app_routes:
         if not route.get("domain"):
             continue
@@ -69,8 +75,8 @@ def render_caddyfile(manage_domain, app_routes, email=None):
     return "\n".join(out) + "\n"
 
 
-def write_caddy(manage_domain, app_routes, email=None):
-    content = render_caddyfile(manage_domain, app_routes, email)
+def write_caddy(manage_domain, app_routes, email=None, panel_hosts=None):
+    content = render_caddyfile(manage_domain, app_routes, email, panel_hosts)
     tmp = CADDYFILE + ".tmp"
     os.makedirs(os.path.dirname(CADDYFILE), exist_ok=True)
     with open(tmp, "w", encoding="utf-8") as fh:
@@ -229,10 +235,10 @@ def plugin_download_url(source, project_id, loader=None, game_versions=None):
     return None, None
 
 
-def write_caddyfile_safe(manage_domain, app_routes, email=None):
+def write_caddyfile_safe(manage_domain, app_routes, email=None, panel_hosts=None):
     """Wie write_caddy, wirft aber nicht."""
     try:
-        write_caddy(manage_domain, app_routes, email)
+        write_caddy(manage_domain, app_routes, email, panel_hosts)
         return True, None
     except Exception as exc:  # noqa: BLE001 - bewusst: Proxy-Fehler nur melden
         return False, str(exc)

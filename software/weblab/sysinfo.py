@@ -125,6 +125,65 @@ def disks():
         return []
 
 
+def _flatten(dev):
+    """Alle Kind-Geräte (Partitionen, LVM …) rekursiv."""
+    out = []
+    for child in dev.get("children") or []:
+        out.append(child)
+        out.extend(_flatten(child))
+    return out
+
+
+def storage():
+    """Physische Laufwerke mit Belegung — aggregiert aus lsblk + df.
+    Je Disk: Name, Größe, belegt/gesamt der eingehängten Partitionen."""
+    by_device = {row["device"]: row for row in mounts()}
+    result = []
+    for dev in disks():
+        if dev.get("type") != "disk" or not dev.get("size"):
+            continue
+        used = total = 0
+        parts = []
+        for child in _flatten(dev):
+            info = by_device.get("/dev/" + (child.get("name") or ""))
+            if child.get("mountpoint") and info:
+                parts.append({"name": child["name"], "mount": child["mountpoint"],
+                              "total": info["total"], "used": info["used"],
+                              "percent": info["percent"]})
+                used += info["used"]
+                total += info["total"]
+        size = dev.get("size", 0) or total
+        result.append({
+            "name": dev.get("name"), "size": size,
+            "model": (dev.get("model") or "").strip(),
+            "used": used, "total": total or size,
+            "percent": round(used / total * 100, 1) if total else 0.0,
+            "partitions": parts,
+        })
+    return result
+
+
+def disk_for_path(path):
+    """Physische Disk, auf der ein Pfad liegt: längster Mount-Prefix -> Gerät -> Parent-Disk."""
+    best, best_len = None, -1
+    for row in mounts():
+        mount = row["mount"]
+        prefix = mount if mount == "/" else mount.rstrip("/") + "/"
+        if path == mount or path.startswith(prefix):
+            if len(mount) > best_len:
+                best, best_len = row, len(mount)
+    if not best:
+        return None
+    devname = best["device"].replace("/dev/", "")
+    for dev in disks():
+        if dev.get("type") != "disk":
+            continue
+        names = {dev.get("name")} | {c.get("name") for c in _flatten(dev)}
+        if devname in names:
+            return dev.get("name")
+    return None
+
+
 def data_locations():
     """Auswahlmöglichkeiten für den Speicherort der App-Daten."""
     locations = []

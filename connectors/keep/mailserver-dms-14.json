@@ -1,6 +1,7 @@
 {
   "id": "mailserver-dms-14",
   "group": "mailserver-dms",
+  "manage_subdomain": "mail",
   "name": "Mailserver",
   "version": "14",
   "category": "Mail",

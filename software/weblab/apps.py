@@ -98,6 +98,15 @@ def host_data_path(app_or_slug, data_path):
     return os.path.join(base, slug)
 
 
+def default_manage_host(connector, manage_domain):
+    """Verwaltungs-Subdomain einer App (z. B. apache.<domain>) — nur wenn der
+    Connector eine vorgibt und eine Verwaltungs-Domain gesetzt ist."""
+    sub = (connector or {}).get("manage_subdomain")
+    if not sub or not manage_domain:
+        return ""
+    return f"{sub}.{manage_domain}"
+
+
 def fixed_ports(connector):
     """Connector-Ports, die 1:1 durchgereicht werden (z. B. Mail: 25/143/465/587/993)."""
     return connector.get("fixed_ports") or []
@@ -145,6 +154,11 @@ def dns_plan(app, connector, values, server_ip):
     if connector.get("http") and app.get("domain") and server_ip:
         plan.append({"type": "A", "name": app["domain"], "content": server_ip,
                      "priority": None, "comment": f"weblab: {app['name']}", "proxied": False})
+    # Verwaltungs-Subdomain (Dashboard/Dateimanager der App) auf den Server zeigen.
+    if app.get("manage_host") and server_ip:
+        plan.append({"type": "A", "name": app["manage_host"], "content": server_ip,
+                     "priority": None, "comment": f"weblab Verwaltung: {app['name']}",
+                     "proxied": False})
     return plan
 
 
@@ -186,15 +200,19 @@ def _zone_match(zones, hostname):
 
 
 def sync_proxy():
-    """Caddy-Konfiguration aus Manage-Domain + allen HTTP-Apps mit Domain neu schreiben."""
+    """Caddy-Konfiguration aus Manage-Domain, HTTP-Apps mit Domain und den
+    App-Verwaltungs-Subdomains neu schreiben."""
     manage_domain = store.get_setting("manage_domain", "")
     routes = []
+    panel_hosts = []
     for app in store.list_apps():
+        if app.get("manage_host"):
+            panel_hosts.append(app["manage_host"])
         connector = catalog.get(app["connector_id"])
         if not connector or not connector.get("http") or not app.get("domain"):
             continue
         routes.append({"domain": app["domain"], "port": app["host_port"], "name": app["name"]})
-    return integrations.write_caddyfile_safe(manage_domain, routes)
+    return integrations.write_caddyfile_safe(manage_domain, routes, panel_hosts=panel_hosts)
 
 
 def _ufw(*args):
@@ -263,6 +281,10 @@ def install(connector_id, form):
     data_dir = host_data_path(slug, data_root)
     os.makedirs(data_dir, exist_ok=True)
 
+    manage_domain = store.get_setting("manage_domain", "")
+    manage_host = (form.get("manage_host") or "").strip().lower() \
+        or default_manage_host(connector, manage_domain)
+
     app = {
         "slug": slug, "name": name, "connector_id": connector["id"],
         "group_id": connector["group"], "version": connector["version"],
@@ -271,7 +293,7 @@ def install(connector_id, form):
         "host_port": host_port, "container_port": container_port,
         "location": form.get("location") or "docker",
         "network": form.get("network") or "bridge",
-        "data_path": data_root,
+        "data_path": data_root, "manage_host": manage_host,
         "cpu": float(form.get("cpu") or 1), "ram_mb": int(float(form.get("ram_mb") or 1024)),
         "values_json": _dumps(values),
     }
@@ -414,6 +436,8 @@ def update(app_id, form, section="basic"):
             changes["name"] = form["name"].strip()
         if "domain" in form:
             changes["domain"] = (form.get("domain") or "").strip().lower()
+        if "manage_host" in form:
+            changes["manage_host"] = (form.get("manage_host") or "").strip().lower()
         if "exposure" in form:
             changes["exposure"] = form["exposure"]
         if "allow_cidr" in form:

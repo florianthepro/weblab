@@ -48,15 +48,28 @@ CREATE TABLE IF NOT EXISTS apps (
   data_path      TEXT NOT NULL DEFAULT '',
   cpu            REAL NOT NULL DEFAULT 1.0,
   ram_mb         INTEGER NOT NULL DEFAULT 1024,
+  manage_host    TEXT NOT NULL DEFAULT '',
   values_json    TEXT NOT NULL DEFAULT '{}',
   created_at     INTEGER NOT NULL
 );
 """
 
+# Nachträglich ergänzte Spalten (Migration bestehender Datenbanken).
+_MIGRATIONS = {"apps": {"manage_host": "TEXT NOT NULL DEFAULT ''"}}
+
+
+def _migrate(conn):
+    for table, columns in _MIGRATIONS.items():
+        existing = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+        for column, decl in columns.items():
+            if column not in existing:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+
 
 def init():
     with connect() as conn:
         conn.executescript(SCHEMA)
+        _migrate(conn)
         if not _get(conn, "session_secret"):
             _set(conn, "session_secret", secrets.token_hex(32))
 
@@ -150,7 +163,7 @@ def delete_user(user_id):
 # ---------- apps ----------
 APP_COLUMNS = (
     "slug name connector_id group_id version domain exposure allow_cidr host_port "
-    "container_port location network data_path cpu ram_mb values_json"
+    "container_port location network data_path cpu ram_mb manage_host values_json"
 ).split()
 
 

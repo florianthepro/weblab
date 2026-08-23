@@ -1,6 +1,7 @@
 {
   "id": "website-nginx-1.27",
   "group": "website-nginx",
+  "manage_subdomain": "nginx",
   "name": "Webseite (Nginx)",
   "version": "1.27",
   "category": "Web",

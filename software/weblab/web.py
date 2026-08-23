@@ -242,6 +242,11 @@ class Handler(BaseHTTPRequestHandler):
             return None
 
         if path == "/":
+            host = (self.headers.get("Host") or "").split(":")[0].lower()
+            if host:
+                for app in store.list_apps():
+                    if (app.get("manage_host") or "").lower() == host:
+                        return self._redirect(f"/apps/{app['id']}")
             return self.page_dashboard()
         if path == "/apps":
             return self.page_apps()
@@ -454,32 +459,26 @@ class Handler(BaseHTTPRequestHandler):
         for app in app_list:
             usage = stats.get(app["slug"], {})
             state = dockerctl.status(app["slug"])
-            target = f"{domain}:{app['host_port']}" if not app["domain"] else app["domain"]
-            rows += (f"<tr><td><a href='/apps/{app['id']}'><b>{ui.esc(app['name'])}</b></a>"
-                     f"<div class='help'>{ui.esc(app['connector_id'])}</div></td>"
+            if app["domain"]:
+                target = f"<a href='https://{ui.esc(app['domain'])}'>{ui.esc(app['domain'])}</a>"
+            else:
+                target = f"<span class='mono'>Port {ui.esc(app['host_port'])}</span>"
+            rows += (f"<tr><td><a href='/apps/{app['id']}'><b>{ui.esc(app['name'])}</b></a></td>"
                      f"<td>{ui.status_pill(state)}</td>"
                      f"<td class='mono'>{ui.esc(usage.get('cpu', '—'))}</td>"
                      f"<td class='mono'>{ui.esc(usage.get('mem', '—'))}</td>"
-                     f"<td class='mono'>{ui.esc(app['host_port'])}</td>"
-                     f"<td class='mono'>{ui.esc(target)}</td></tr>")
+                     f"<td>{target}</td></tr>")
         if not rows:
-            rows = ("<tr><td colspan='6' class='muted'>Noch keine App installiert — "
+            rows = ("<tr><td colspan='5' class='muted'>Noch keine App installiert — "
                     "<a href='/apps'>zum Katalog</a>.</td></tr>")
 
         body = f"""<h1>Dashboard</h1>
 <p class="sub">{ui.esc(info['hostname'])} · {ui.esc(info['os'])} · Läuft seit {ui.esc(sysinfo.human_uptime(info['uptime']))}</p>
 <div class="grid g4">{cards}</div>
-<h2>Apps &amp; Verbrauch</h2>
+<h2>Apps</h2>
 <div class="card"><div class="tbl-wrap"><table>
-<tr><th>App</th><th>Status</th><th>CPU</th><th>Speicher</th><th>Port</th><th>Erreichbar über</th></tr>
-{rows}</table></div></div>
-<h2>Server</h2>
-<div class="card"><dl class="kv">
-<dt>Verwaltungs-Domain</dt><dd class="mono">{ui.esc(domain) or '—'}</dd>
-<dt>Server-IP</dt><dd class="mono">{ui.esc(store.get_setting('server_ip', '—'))}</dd>
-<dt>Kernel</dt><dd class="mono">{ui.esc(info['kernel'])}</dd>
-<dt>Docker</dt><dd>{'aktiv' if dockerctl.available() else '<span style="color:var(--bad)">nicht verfügbar</span>'}</dd>
-</dl></div>"""
+<tr><th>App</th><th>Status</th><th>CPU</th><th>Speicher</th><th>Erreichbar über</th></tr>
+{rows}</table></div></div>"""
         self._render("Dashboard", body, "/")
 
     # Apps: Katalog + Liste
@@ -586,6 +585,16 @@ class Handler(BaseHTTPRequestHandler):
             for n in networks)
         exposure_default = connector.get("default_exposure", "external")
 
+        manage_field = ""
+        if connector.get("manage_subdomain"):
+            default_mh = (f"{connector['manage_subdomain']}."
+                          f"{store.get_setting('manage_domain', 'example.com')}")
+            manage_field = (
+                f'<div class="field"><label for="manage_host">Verwaltungs-Adresse</label>'
+                f'<input id="manage_host" name="manage_host" value="{ui.esc(default_mh)}"'
+                f'{ui._info_attr("Eigenes Dashboard + Dateimanager dieser App unter dieser Adresse. Die Seite selbst läuft unter der Domain darüber.")}>'
+                f'<p class="help">Dashboard &amp; Dateien dieser App. Die Domain oben ist die öffentliche Adresse der Seite.</p></div>')
+
         body = f"""<a href="/apps" class="muted">← Katalog</a>
 <h1>{ui.esc(group['icon'])} {ui.esc(group['name'])}</h1>
 <p class="sub">{ui.esc(group['description'] or group['summary'])}</p>
@@ -603,6 +612,7 @@ class Handler(BaseHTTPRequestHandler):
   <div class="field"><label for="name">Name</label>
    <input id="name" name="name" value="{ui.esc(group['name'])}" required></div>
   {self._domain_field('', f"app.{store.get_setting('manage_domain', 'example.com')}")}
+  {manage_field}
   {ui.select_field('exposure', 'Erreichbarkeit', ['external', 'internal', 'specific'], exposure_default,
                    'Intern = nur dieser Server. Spezifisch = nur erlaubte IPs.',
                    {'external': 'Extern (öffentlich)', 'internal': 'Intern (nur Server)',
@@ -652,10 +662,12 @@ class Handler(BaseHTTPRequestHandler):
         return app, catalog.get(app["connector_id"])
 
     def _app_tabs(self, app, active):
-        items = [("Übersicht", f"/apps/{app['id']}"),
-                 ("Dateien", f"/apps/{app['id']}/files"),
-                 ("Einstellungen", f"/apps/{app['id']}/edit"),
-                 ("Protokoll", f"/apps/{app['id']}/logs")]
+        connector = catalog.get(app["connector_id"]) or {}
+        items = [("Übersicht", f"/apps/{app['id']}")]
+        if connector.get("manage_subdomain"):  # Dateimanager nur bei Seiten/Diensten
+            items.append(("Dateien", f"/apps/{app['id']}/files"))
+        items += [("Einstellungen", f"/apps/{app['id']}/edit"),
+                  ("Protokoll", f"/apps/{app['id']}/logs")]
         return '<div class="tabs">' + "".join(
             f'<a class="{"on" if label == active else ""}" href="{href}">{label}</a>'
             for label, href in items) + "</div>"
@@ -710,6 +722,7 @@ class Handler(BaseHTTPRequestHandler):
 <div class="card"><dl class="kv">
 <dt>Erreichbar über</dt><dd class="mono">{ui.esc(url)}</dd>
 <dt>Domain</dt><dd class="mono">{ui.esc(app['domain']) or '—'}</dd>
+{f'<dt>Verwaltung</dt><dd class="mono"><a href="https://{ui.esc(app["manage_host"])}">{ui.esc(app["manage_host"])}</a></dd>' if app.get('manage_host') else ''}
 <dt>Port (extern)</dt><dd class="mono">{ui.esc(app['host_port'])} → intern {ui.esc(app['container_port'])}</dd>
 <dt>Sichtbarkeit</dt><dd>{ui.esc(EXPOSURE_LABELS.get(app['exposure'], app['exposure']))}{(' · ' + ui.esc(app['allow_cidr'])) if app['allow_cidr'] else ''}</dd>
 <dt>Ablageort</dt><dd>{ui.esc(LOCATION_LABELS.get(app['location'], app['location']))}</dd>
@@ -780,6 +793,10 @@ bleiben erhalten. Rot umrandete Felder ändern den Aufbau grundlegend — erst f
 <div class="field"><label for="name">Name</label>
  <input id="name" name="name" value="{ui.esc(app['name'])}" required></div>
 {self._domain_field(app['domain'])}
+{(f'<div class="field"><label for="manage_host">Verwaltungs-Adresse</label>'
+  f'<input id="manage_host" name="manage_host" value="{ui.esc(app.get("manage_host",""))}"'
+  f'{ui._info_attr("Dashboard + Dateimanager dieser App. Die Seite selbst läuft unter der Domain darüber.")}></div>')
+  if connector.get('manage_subdomain') else ''}
 {ui.select_field('exposure', 'Erreichbarkeit', ['external', 'internal', 'specific'], app['exposure'],
                  'Intern = nur dieser Server. Spezifisch = nur erlaubte IPs.',
                  {'external': 'Extern (öffentlich)', 'internal': 'Intern (nur Server)',
@@ -1171,59 +1188,54 @@ Daraus entsteht ein Token nur für DNS, gültig ein Jahr. Der Schlüssel wird ni
                                                                   state, challenge)})
 
     def page_storage(self):
-        mount_rows = ""
-        for mount in sysinfo.mounts():
-            mount_rows += f"""<tr><td class="mono"><b>{ui.esc(mount['mount'])}</b></td>
-<td class="mono">{ui.esc(mount['device'])}</td>
-<td class="mono">{ui.esc(sysinfo.human_bytes(mount['total']))}</td>
-<td class="mono">{ui.esc(sysinfo.human_bytes(mount['available']))}</td>
-<td style="min-width:150px"><div class="bar {'bad' if mount['percent'] >= 90 else 'warn' if mount['percent'] >= 75 else 'ok'}">
-<i style="width:{mount['percent']:.1f}%"></i></div>
-<div class="help">{mount['percent']} % belegt</div></td></tr>"""
-
-        disk_rows = ""
-        for disk in sysinfo.disks():
-            children = disk.get("children") or []
-            disk_rows += (f"<tr><td class='mono'><b>{ui.esc(disk.get('name'))}</b></td>"
-                          f"<td class='mono'>{ui.esc(sysinfo.human_bytes(disk.get('size', 0)))}</td>"
-                          f"<td>{ui.esc(disk.get('type', ''))}</td>"
-                          f"<td class='mono'>{ui.esc(disk.get('mountpoint') or '—')}</td>"
-                          f"<td>{ui.esc(disk.get('model') or '')}</td></tr>")
-            for child in children:
-                disk_rows += (f"<tr><td class='mono' style='padding-left:26px'>└ {ui.esc(child.get('name'))}</td>"
-                              f"<td class='mono'>{ui.esc(sysinfo.human_bytes(child.get('size', 0)))}</td>"
-                              f"<td>{ui.esc(child.get('fstype') or child.get('type', ''))}</td>"
-                              f"<td class='mono'>{ui.esc(child.get('mountpoint') or '—')}</td>"
-                              f"<td></td></tr>")
-        disk_rows = disk_rows or "<tr><td colspan='5' class='muted'>Keine Daten.</td></tr>"
-
-        app_rows = ""
+        import subprocess
+        disks = sysinfo.storage()
+        default_disk = disks[0]["name"] if disks else "?"
+        apps_by_disk = {}
         for app in store.list_apps():
             path = appsvc.host_data_path(app, app["data_path"])
-            size = ""
+            size = None
             try:
-                import subprocess
                 out = subprocess.run(["du", "-sb", path], capture_output=True, text=True, timeout=20)
                 if out.returncode == 0:
-                    size = sysinfo.human_bytes(int(out.stdout.split()[0]))
+                    size = int(out.stdout.split()[0])
             except Exception:  # noqa: BLE001
-                size = "—"
-            app_rows += (f"<tr><td><a href='/apps/{app['id']}'>{ui.esc(app['name'])}</a></td>"
-                         f"<td class='mono'>{ui.esc(path)}</td>"
-                         f"<td class='mono'>{ui.esc(size or '—')}</td></tr>")
-        app_rows = app_rows or "<tr><td colspan='3' class='muted'>Keine Apps.</td></tr>"
+                size = None
+            disk = sysinfo.disk_for_path(path) or default_disk
+            apps_by_disk.setdefault(disk, []).append({"app": app, "size": size})
+
+        total_size = sum(d["size"] for d in disks)
+        total_used = sum(d["used"] for d in disks)
+        total_pct = round(total_used / total_size * 100, 1) if total_size else 0.0
+        summary = ui.stat("Gesamtspeicher", sysinfo.human_bytes(total_size), total_pct,
+                          f"{sysinfo.human_bytes(total_used)} belegt · "
+                          f"{len(disks)} Laufwerk{'e' if len(disks) != 1 else ''}")
+
+        def bar_class(pct):
+            return "bad" if pct >= 90 else "warn" if pct >= 75 else "ok"
+
+        disk_cards = ""
+        for disk in disks:
+            apps = apps_by_disk.get(disk["name"], [])
+            app_rows = "".join(
+                f"<tr><td><a href='/apps/{a['app']['id']}'>{ui.esc(a['app']['name'])}</a></td>"
+                f"<td class='mono'>{ui.esc(sysinfo.human_bytes(a['size']) if a['size'] is not None else '—')}</td>"
+                f"</tr>" for a in apps) or \
+                "<tr><td colspan='2' class='muted'>Keine App auf diesem Laufwerk.</td></tr>"
+            model = f' <span class="muted">· {ui.esc(disk["model"])}</span>' if disk["model"] else ""
+            disk_cards += f"""<div class="card">
+<div class="between"><h3 style="margin:0">🖴 <span class="mono">{ui.esc(disk['name'])}</span>{model}</h3>
+<span class="mono">{ui.esc(sysinfo.human_bytes(disk['size']))}</span></div>
+<div class="bar {bar_class(disk['percent'])}" style="margin:11px 0 4px"><i style="width:{disk['percent']:.1f}%"></i></div>
+<div class="help">{disk['percent']} % belegt · {ui.esc(sysinfo.human_bytes(disk['used']))} von {ui.esc(sysinfo.human_bytes(disk['total']))}</div>
+<div class="tbl-wrap"><table style="margin-top:12px">
+<tr><th>App</th><th>Belegt</th></tr>{app_rows}</table></div></div>"""
+        disk_cards = disk_cards or "<div class='card muted'>Keine Laufwerke erkannt.</div>"
 
         body = f"""<h1>Speicher</h1>
-<p class="sub">Laufwerke, Belegung und wo die Daten der Apps liegen.</p>
-<h2>Dateisysteme</h2>
-<div class="card"><div class="tbl-wrap"><table>
-<tr><th>Mount</th><th>Gerät</th><th>Größe</th><th>Frei</th><th>Belegung</th></tr>{mount_rows}</table></div></div>
-<h2>Laufwerke</h2>
-<div class="card"><div class="tbl-wrap"><table>
-<tr><th>Gerät</th><th>Größe</th><th>Typ</th><th>Eingehängt</th><th>Modell</th></tr>{disk_rows}</table></div></div>
-<h2>Daten der Apps</h2>
-<div class="card"><div class="tbl-wrap"><table>
-<tr><th>App</th><th>Pfad</th><th>Belegt</th></tr>{app_rows}</table></div></div>"""
+<p class="sub">Laufwerke des Servers und was die Apps darauf belegen.</p>
+<div class="grid g4">{summary}</div>
+<h2>Laufwerke</h2>{disk_cards}"""
         self._render("Speicher", body, "/storage")
 
     def page_users(self):
@@ -1368,6 +1380,8 @@ Daraus entsteht ein Token nur für DNS, gültig ein Jahr. Der Schlüssel wird ni
         app, connector = self._app_and_connector(app_id)
         if not app:
             return self._redirect("/apps", ("err", "App nicht gefunden."))
+        if not (connector or {}).get("manage_subdomain"):
+            return self._redirect(f"/apps/{app_id}")
         base = self._app_base(app)
         query = self._query()
         current = query.get("p", "")
