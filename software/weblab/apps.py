@@ -233,8 +233,10 @@ def sync_proxy():
         routes.append({"domain": app["domain"], "port": app["host_port"], "name": app["name"]})
     access = store.get_setting("manage_access", "both")
     domain_ok = store.get_setting("domain_ok", "1") != "0"
+    https_ready = integrations.https_ready(manage_domain) if manage_domain else False
     return integrations.write_caddyfile_safe(manage_domain, routes, panel_hosts=panel_hosts,
-                                             access=access, domain_ok=domain_ok, cert_hosts=cert_hosts)
+                                             access=access, domain_ok=domain_ok,
+                                             cert_hosts=cert_hosts, https_ready=https_ready)
 
 
 def _ufw(*args):

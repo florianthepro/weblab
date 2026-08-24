@@ -43,22 +43,28 @@ def http_json(url, method="GET", headers=None, data=None, timeout=25):
 
 
 def render_caddyfile(manage_domain, app_routes, email=None, panel_hosts=None,
-                     access="both", domain_ok=True, cert_hosts=None):
+                     access="both", domain_ok=True, cert_hosts=None, https_ready=False):
     """app_routes: [{'domain':..., 'port':...}] — nur Apps mit Domain und http=true.
     panel_hosts: zusätzliche Hostnamen (App-Verwaltungs-Subdomains), die auf das Panel zeigen.
     access: 'both' | 'domain' | 'ip' — worüber die Verwaltung erreichbar ist.
     domain_ok: zeigt der DNS-Eintrag noch hierher? Wenn nicht, bleibt das Panel
                immer über die IP erreichbar (kein Aussperren).
     cert_hosts: Hostnamen von Diensten (z. B. Mailserver), für die Caddy nur ein
-                Zertifikat holen soll — unabhängig vom Zugangsmodus."""
+                Zertifikat holen soll — unabhängig vom Zugangsmodus.
+    https_ready: hat Caddy für die Domain schon ein Zertifikat? Erst dann wird auf
+                 HTTPS umgeleitet — vorher bleibt das Panel über HTTP erreichbar,
+                 damit man sich sofort anmelden kann (kein Warten aufs Zertifikat)."""
     email = email or (f"admin@{manage_domain}" if manage_domain else "")
     panel_hosts = [h for h in (panel_hosts or []) if h]
-    # Panel auf der Domain nur, wenn gewünscht UND die Domain erreichbar ist.
-    domain_serves = bool(manage_domain) and access in ("domain", "both") and domain_ok
-    # Die IP bedient das Panel immer — außer im reinen Domain-Betrieb mit intakter Domain.
-    ip_serves_panel = not (access == "domain" and domain_serves)
     app_domains = [r["domain"] for r in app_routes if r.get("domain")]
-    panel_domain_hosts = ([manage_domain] + panel_hosts) if domain_serves else []
+    # Panel soll über die Domain laufen, wenn gewünscht UND die Domain hierher zeigt.
+    want_domain = bool(manage_domain) and access in ("domain", "both") and domain_ok
+    # Erst wenn Caddy wirklich ein Zertifikat hat, wird auf HTTPS umgeleitet — sonst
+    # bleibt das Panel über HTTP erreichbar (Anmeldung klappt sofort, kein Aussperren).
+    https_on = want_domain and https_ready
+    # Reiner Domain-Betrieb leitet die IP erst auf die Domain um, wenn HTTPS wirklich steht.
+    ip_serves_panel = not (access == "domain" and https_on)
+    panel_domain_hosts = ([manage_domain] + panel_hosts) if https_on else []
 
     out = ["{"]
     if email:
@@ -66,7 +72,7 @@ def render_caddyfile(manage_domain, app_routes, email=None, panel_hosts=None,
     out.append("\tadmin 127.0.0.1:2019")
     out.append("}")
     out.append("")
-    out.append("# HTTP-Ebene: IP-Zugriff und HTTP->HTTPS-Umleitung benannter Hosts")
+    out.append("# HTTP-Ebene: IP-Zugriff und HTTP->HTTPS-Umleitung, sobald Zertifikat steht")
     out.append("http:// {")
     named = panel_domain_hosts + app_domains
     if named:
@@ -83,7 +89,7 @@ def render_caddyfile(manage_domain, app_routes, email=None, panel_hosts=None,
         out.append(f"\t\tredir https://{manage_domain}{{uri}} temporary")
     out.append("\t}")
     out.append("}")
-    if domain_serves:
+    if want_domain:
         out += ["", "# Verwaltungsoberfläche", f"{manage_domain} {{",
                 "\tencode gzip zstd", f"\treverse_proxy 127.0.0.1:{PANEL_PORT}", "}"]
         for host in panel_hosts:
@@ -136,6 +142,13 @@ def caddy_cert_paths(domain):
     return (crt[0], key[0]) if crt and key else (None, None)
 
 
+def https_ready(domain):
+    """True, wenn Caddy für die Domain schon ein Zertifikat hat. Solange nicht, bleibt
+    das Panel über HTTP erreichbar, damit die Anmeldung nicht aufs Zertifikat warten muss."""
+    crt, key = caddy_cert_paths(domain)
+    return bool(crt and key)
+
+
 def exported_cert_dir(domain):
     """Pfad mit dem exportierten Zertifikat, falls vorhanden — sonst None."""
     out = os.path.join(CERT_DIR, domain)
@@ -177,9 +190,9 @@ _caddy_lock = threading.Lock()
 
 
 def write_caddy(manage_domain, app_routes, email=None, panel_hosts=None,
-                access="both", domain_ok=True, cert_hosts=None):
+                access="both", domain_ok=True, cert_hosts=None, https_ready=False):
     content = render_caddyfile(manage_domain, app_routes, email, panel_hosts,
-                               access, domain_ok, cert_hosts)
+                               access, domain_ok, cert_hosts, https_ready)
     # Ein Schloss, damit Watchdog- und Anfrage-Threads sich nicht in die Quere kommen.
     with _caddy_lock:
         os.makedirs(os.path.dirname(CADDYFILE), exist_ok=True)
@@ -351,10 +364,11 @@ def plugin_download_url(source, project_id, loader=None, game_versions=None):
 
 
 def write_caddyfile_safe(manage_domain, app_routes, email=None, panel_hosts=None,
-                         access="both", domain_ok=True, cert_hosts=None):
+                         access="both", domain_ok=True, cert_hosts=None, https_ready=False):
     """Wie write_caddy, wirft aber nicht."""
     try:
-        write_caddy(manage_domain, app_routes, email, panel_hosts, access, domain_ok, cert_hosts)
+        write_caddy(manage_domain, app_routes, email, panel_hosts, access, domain_ok,
+                    cert_hosts, https_ready)
         return True, None
     except Exception as exc:  # noqa: BLE001 - bewusst: Proxy-Fehler nur melden
         return False, str(exc)

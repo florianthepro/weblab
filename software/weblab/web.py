@@ -114,6 +114,7 @@ def run_setup(username, password, domain, access="both", cf_email="", cf_key="")
             store.set_setting("manage_domain", domain)
             store.set_setting("manage_access", access)
             store.set_setting("domain_ok", "1")
+            store.set_setting("https_ready", "0")
 
             SETUP_STATE.update({"percent": 25, "step": "Server-IP ermitteln"})
             server_ip = sysinfo.public_ip()
@@ -150,8 +151,13 @@ def run_setup(username, password, domain, access="both", cf_email="", cf_key="")
             SETUP_STATE.update({"percent": 95, "step": "Zertifikat wird ausgestellt"})
             time.sleep(3)
             store.set_setting("setup_done", "1")
-            target = (f"https://{domain}/login"
-                      if domain and access in ("domain", "both") else "/login")
+            if domain and access in ("domain", "both"):
+                # Vor dem Zertifikat ueber HTTP anmelden (klappt sofort); sobald das
+                # Zertifikat da ist, leitet Caddy selbst auf HTTPS um.
+                scheme = "https" if integrations.https_ready(domain) else "http"
+                target = f"{scheme}://{domain}/login"
+            else:
+                target = "/login"
             SETUP_STATE.update({"percent": 100, "step": "Fertig", "done": True,
                                 "running": False, "redirect": target})
         except Exception as exc:  # noqa: BLE001 - Fehler dem Nutzer zeigen
@@ -1716,6 +1722,11 @@ def _domain_watchdog():
                 _clear_domain_banner()      # veralteten Hinweis entfernen
                 misses = ups = 0
                 continue
+            # Sobald Caddy das Zertifikat hat, von HTTP-Zugang auf HTTPS umstellen.
+            hr = "1" if integrations.https_ready(domain) else "0"
+            if hr != store.get_setting("https_ready", "0"):
+                store.set_setting("https_ready", hr)
+                appsvc.sync_proxy()
             up = integrations.domain_up(domain, store.get_setting("server_ip", ""))
             if up:
                 ups += 1
