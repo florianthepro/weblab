@@ -33,7 +33,8 @@ LOCATION_LABELS = {"docker": "Docker", "device": "Gerät"}
 SESSION_MAX_AGE = 12 * 3600
 
 # Fortschritt des Setup-Assistenten
-SETUP_STATE = {"running": False, "percent": 0, "step": "", "done": False, "error": None, "redirect": "/login"}
+SETUP_STATE = {"running": False, "percent": 0, "step": "", "done": False, "error": None,
+               "redirect": "/login", "domain_url": ""}
 
 # Laufende Cloudflare-Anmeldung (OAuth)
 CF_LOGIN = {"state": "", "verifier": "", "client_id": "", "client_secret": "",
@@ -153,15 +154,15 @@ def run_setup(username, password, domain, access="both", cf_email="", cf_key="")
             SETUP_STATE.update({"percent": 95, "step": "Zertifikat wird ausgestellt"})
             time.sleep(3)
             store.set_setting("setup_done", "1")
-            if domain and access in ("domain", "both"):
-                # Vor dem Zertifikat ueber HTTP anmelden (klappt sofort); sobald das
-                # Zertifikat da ist, leitet Caddy selbst auf HTTPS um.
-                scheme = "https" if integrations.https_ready(domain) else "http"
-                target = f"{scheme}://{domain}/login"
-            else:
-                target = "/login"
+            # Immer funktionierender Weg zur Anmeldung: relativer Pfad bleibt auf dem
+            # aktuellen Host (die IP über HTTP) — kein Warten aufs Zertifikat, kein
+            # Hängen. Ist eine Domain gewünscht, wechselt die Fortschrittsseite erst
+            # dann auf https://domain, wenn Caddy das Zertifikat wirklich hat.
+            domain_url = (f"https://{domain}/login"
+                          if domain and access in ("domain", "both") else "")
             SETUP_STATE.update({"percent": 100, "step": "Fertig", "done": True,
-                                "running": False, "redirect": target})
+                                "running": False, "redirect": "/login",
+                                "domain_url": domain_url})
         except Exception as exc:  # noqa: BLE001 - Fehler dem Nutzer zeigen
             SETUP_STATE.update({"error": str(exc), "running": False, "step": "Fehler"})
 
@@ -326,6 +327,12 @@ class Handler(BaseHTTPRequestHandler):
             return self.page_setup_progress()
         if path == "/api/setup/status":
             return self._json(SETUP_STATE)
+        if path == "/api/setup/cert":
+            # Live-Check für die Fortschrittsseite: steht das Zertifikat für die
+            # Verwaltungsdomain schon? (nur die konfigurierte Domain — kein Oracle)
+            dom = store.get_setting("manage_domain", "")
+            return self._json({"ready": bool(dom) and integrations.https_ready(dom),
+                               "url": f"https://{dom}/login" if dom else ""})
         if path == "/login":
             return self.page_login()
         if path == "/logout":
@@ -496,15 +503,41 @@ class Handler(BaseHTTPRequestHandler):
 </div></div>
 <script>
 (function(){
+ var step=document.getElementById('step'),errEl=document.getElementById('err');
+ function finish(s){
+  // Kein Domain-Ziel (nur IP): sofort auf den relativen Login (aktueller Host).
+  if(!s.domain_url){step.textContent='Fertig — weiter zur Anmeldung.';
+    setTimeout(function(){location.href=(s.redirect||'/login')},900);return;}
+  // Domain gewünscht: auf HTTPS wechseln, sobald Caddy das Zertifikat hat. Solange
+  // nicht: hier bleiben (nichts hängt) und einen sofort nutzbaren IP-Login anbieten.
+  step.textContent='Zertifikat wird ausgestellt … das kann bis zu einer Minute dauern.';
+  var hint='<a href="'+(s.redirect||'/login')+'">Jetzt über die IP-Adresse anmelden</a>';
+  errEl.innerHTML='<p class="help">Dauert es zu lange? '+hint+'</p>';
+  var tries=0;
+  (function waitCert(){
+   fetch('/api/setup/cert').then(function(r){return r.json()}).then(function(c){
+    if(c&&c.ready){step.textContent='Zertifikat da — weiter zur sicheren Domain …';
+      location.href=c.url||s.domain_url;return;}
+    tries++;
+    if(tries===25){  // ~75s ohne Zertifikat: mögliche Ursachen zeigen (kein Hängen)
+      errEl.innerHTML='<div class="msg">Das Zertifikat kommt noch nicht. Caddy '+
+        'versucht es automatisch weiter. Häufige Ursachen: die Domain muss direkt '+
+        'auf diesen Server zeigen (bei Cloudflare graue Wolke / „DNS only“, nicht '+
+        'proxied), Port 80 und 443 müssen erreichbar sein, oder Let’s Encrypt '+
+        'bremst nach mehreren Fehlversuchen kurz (löst sich von selbst innerhalb '+
+        'einer Stunde).</div><p class="help">Solange: '+hint+'</p>';
+    }
+    setTimeout(waitCert,3000);
+   }).catch(function(){setTimeout(waitCert,4000)});
+  })();
+ }
  function tick(){
   fetch('/api/setup/status').then(function(r){return r.json()}).then(function(s){
    document.getElementById('bar').style.width=(s.percent||0)+'%';
    document.getElementById('pct').textContent=(s.percent||0)+' %';
-   if(s.step)document.getElementById('step').textContent=s.step;
-   if(s.error){document.getElementById('err').innerHTML=
-     '<div class="msg err">'+s.error+'</div>';return;}
-   if(s.done){document.getElementById('step').textContent='Fertig — weiter zur Anmeldung.';
-     setTimeout(function(){location.href=(s.redirect||'/login')},900);return;}
+   if(s.step)step.textContent=s.step;
+   if(s.error){errEl.innerHTML='<div class="msg err">'+s.error+'</div>';return;}
+   if(s.done){finish(s);return;}
    setTimeout(tick,900);
   }).catch(function(){setTimeout(tick,1500)});
  } tick();})();

@@ -58,24 +58,36 @@ def render_caddyfile(manage_domain, app_routes, email=None, panel_hosts=None,
     """app_routes: [{'domain':..., 'port':...}] — nur Apps mit Domain und http=true.
     panel_hosts: zusätzliche Hostnamen (App-Verwaltungs-Subdomains), die auf das Panel zeigen.
     access: 'both' | 'domain' | 'ip' — worüber die Verwaltung erreichbar ist.
-    domain_ok: zeigt der DNS-Eintrag noch hierher? Wenn nicht, bleibt das Panel
-               immer über die IP erreichbar (kein Aussperren).
+    domain_ok: zeigt der DNS-Eintrag noch hierher? Steuert NUR das IP-Failover:
+               zeigt die Domain nicht mehr hierher, bleibt das Panel zusätzlich
+               über die IP erreichbar (kein Aussperren). Der HTTPS-Block für die
+               Domain wird trotzdem immer geschrieben, damit Caddy das Zertifikat
+               holen/erneuern kann, sobald die Domain (wieder) hierher zeigt.
     cert_hosts: Hostnamen von Diensten (z. B. Mailserver), für die Caddy nur ein
                 Zertifikat holen soll — unabhängig vom Zugangsmodus.
-    https_ready: hat Caddy für die Domain schon ein Zertifikat? Erst dann wird auf
-                 HTTPS umgeleitet — vorher bleibt das Panel über HTTP erreichbar,
-                 damit man sich sofort anmelden kann (kein Warten aufs Zertifikat)."""
+    https_ready: hat Caddy für die Domain schon ein Zertifikat? Steuert NUR, ob im
+                 reinen Domain-Betrieb die IP schon auf die Domain umleiten darf.
+                 Solange kein Zertifikat da ist, bedient die IP das Panel selbst über
+                 HTTP — sonst würde die IP auf eine noch zertifikatslose HTTPS-Domain
+                 umleiten und der Browser hinge fest ("nicht sicher")."""
     email = email or (f"admin@{manage_domain}" if manage_domain else "")
     panel_hosts = [h for h in (panel_hosts or []) if h]
     app_domains = [r["domain"] for r in app_routes if r.get("domain")]
-    # Panel soll über die Domain laufen, wenn gewünscht UND die Domain hierher zeigt.
-    want_domain = bool(manage_domain) and access in ("domain", "both") and domain_ok
-    # Named Domains werden immer auf HTTPS umgeleitet — Caddy holt und erneuert das
-    # Zertifikat selbst (Let's Encrypt). Kein eigenes Zertifikats-Raten mehr (das war
-    # fragil und hat den Redirect dauerhaft aus gelassen -> "nur HTTP"/self-signed).
+    # Panel soll über die Domain laufen, wenn gewünscht. Der HTTPS-Block wird IMMER
+    # geschrieben (unabhängig von domain_ok) — Caddy holt und erneuert das Zertifikat
+    # selbst (Let's Encrypt), sobald die Domain hierher zeigt. Vom domain_ok abhängig
+    # zu machen, würde bei einem fragilen DNS-Check die ganze HTTPS-Seite weglassen
+    # -> "nur HTTP"/nicht sicher.
+    want_domain = bool(manage_domain) and access in ("domain", "both")
     https_on = want_domain
-    # Reiner Domain-Betrieb leitet die IP erst auf die Domain um, wenn HTTPS wirklich steht.
-    ip_serves_panel = not (access == "domain" and https_on)
+    # Die IP bedient das Panel direkt, außer im reinen Domain-Betrieb, solange die
+    # Domain hierher zeigt UND das Zertifikat steht. Failover-Gründe, in denen die IP
+    # das Panel weiter selbst über HTTP bedient (kein Aussperren, kein Hängen):
+    #  - Zugang ist nicht rein per Domain (both/ip),
+    #  - die Domain zeigt nicht mehr hierher (domain_ok=False),
+    #  - das Domain-Zertifikat steht noch nicht (https_ready=False) — sonst würde die
+    #    IP auf eine zertifikatslose HTTPS-Domain umleiten und der Browser hinge fest.
+    ip_serves_panel = (access != "domain") or (not domain_ok) or (not https_ready)
     panel_domain_hosts = ([manage_domain] + panel_hosts) if https_on else []
 
     out = ["{"]
