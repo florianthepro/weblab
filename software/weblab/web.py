@@ -163,6 +163,13 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         pass  # Zugriffe protokolliert Caddy
 
+    def handle_one_request(self):
+        # Bei Keep-Alive bedient dieselbe Instanz mehrere Anfragen. Die
+        # zwischengespeicherte Sitzung muss pro Anfrage neu gelesen werden,
+        # sonst bleibt ein altes "nicht eingeloggt" haften -> Login-Schleife.
+        self.__dict__.pop("_session", None)
+        super().handle_one_request()
+
     def _send(self, body, status=200, ctype="text/html; charset=utf-8", headers=None):
         data = body.encode("utf-8") if isinstance(body, str) else body
         self.send_response(status)
