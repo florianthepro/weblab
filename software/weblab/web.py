@@ -246,7 +246,7 @@ class Handler(BaseHTTPRequestHandler):
 
     # Bereiche, die nur der Administrator sehen darf (Nutzer werden umgeleitet).
     ADMIN_AREAS = ("/apps/catalog", "/apps/install", "/network", "/storage",
-                   "/users", "/transfer", "/settings", "/api/stats", "/api/setup")
+                   "/users", "/transfer", "/settings", "/api/stats", "/api/setup", "/banner")
 
     def _authz(self, path):
         """Zugriffskontrolle fuer eingeschraenkte Nutzer. True = abgewiesen (Antwort schon gesendet).
@@ -1762,6 +1762,8 @@ ProtonVPN. Privaten Schlüssel und Adresse aus der heruntergeladenen WireGuard-K
         app, connector = self._app_and_connector(app_id)
         if not app:
             return self._redirect("/apps", ("err", "App nicht gefunden."))
+        if not perms.can_action(perms.effective(self.user, app, connector), "files"):
+            return self._redirect(f"/apps/{app_id}", ("err", "Dafuer fehlt die Berechtigung."))
         if not (connector or {}).get("manage_subdomain"):
             return self._redirect(f"/apps/{app_id}")
         base = self._app_base(app)
@@ -1865,9 +1867,11 @@ ProtonVPN. Privaten Schlüssel und Adresse aus der heruntergeladenen WireGuard-K
         self._render(f"{app['name']} — Dateien", body, "/apps")
 
     def download_file(self, app_id):
-        app, _ = self._app_and_connector(app_id)
+        app, connector = self._app_and_connector(app_id)
         if not app:
             return self._redirect("/apps", ("err", "App nicht gefunden."))
+        if not perms.can_action(perms.effective(self.user, app, connector), "files"):
+            return self._redirect(f"/apps/{app_id}", ("err", "Dafuer fehlt die Berechtigung."))
         try:
             data, name = files.read_bytes(self._app_base(app), self._query().get("p", ""))
         except files.FileError as exc:
