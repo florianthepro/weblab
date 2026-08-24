@@ -26,8 +26,14 @@
     "MODRINTH_DOWNLOAD_DEPENDENCIES": "required"
   },
   "fixed_ports": [
-    { "port": 25565, "protocol": "tcp" },
-    { "port": 19132, "protocol": "udp" }
+    {
+      "port": 25565,
+      "protocol": "tcp"
+    },
+    {
+      "port": 19132,
+      "protocol": "udp"
+    }
   ],
   "notes": [
     "Java verbindet auf 25565 (TCP), Bedrock (Xbox/Switch/Handy) auf 19132 (UDP).",
@@ -43,7 +49,11 @@
         "min": 1,
         "max": 64,
         "required": true,
-        "target": { "kind": "env", "name": "MEMORY", "format": "{value}G" }
+        "target": {
+          "kind": "env",
+          "name": "MEMORY",
+          "format": "{value}G"
+        }
       },
       {
         "key": "max_players",
@@ -76,7 +86,12 @@
         "key": "gamemode",
         "label": "Spielmodus",
         "type": "select",
-        "options": ["survival", "creative", "adventure", "spectator"],
+        "options": [
+          "survival",
+          "creative",
+          "adventure",
+          "spectator"
+        ],
         "default": "survival",
         "target": {
           "kind": "file_line",
@@ -88,7 +103,12 @@
         "key": "difficulty",
         "label": "Schwierigkeit",
         "type": "select",
-        "options": ["peaceful", "easy", "normal", "hard"],
+        "options": [
+          "peaceful",
+          "easy",
+          "normal",
+          "hard"
+        ],
         "default": "normal",
         "target": {
           "kind": "file_line",
@@ -129,9 +149,42 @@
       "path": "/data/plugins",
       "restart_after_change": true,
       "sources": [
-        { "id": "modrinth", "name": "Modrinth", "loader": "paper", "game_versions": ["1.21.5"] },
-        { "id": "spiget", "name": "SpigotMC" }
+        {
+          "id": "modrinth",
+          "name": "Modrinth",
+          "loader": "paper",
+          "game_versions": [
+            "1.21.5"
+          ]
+        },
+        {
+          "id": "spiget",
+          "name": "SpigotMC"
+        }
       ]
     }
+  },
+  "import": {
+    "label": "Vorhandenen Server als Crossplay übernehmen (Welt + Einstellungen)",
+    "signature": [
+      "eula.txt",
+      "server.jar",
+      "world/level.dat"
+    ],
+    "search": [
+      "/opt/minecraft",
+      "/opt/minecraft/*",
+      "/srv/minecraft",
+      "/srv/minecraft/*",
+      "/home/*/minecraft",
+      "/home/*/minecraft/*",
+      "/root/minecraft",
+      "/root/minecraft/*",
+      "/opt/*/minecraft",
+      "/var/minecraft",
+      "/minecraft",
+      "/home/*/mc",
+      "/opt/mc"
+    ]
   }
 }

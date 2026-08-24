@@ -18,6 +18,7 @@ import dockerctl
 import files
 import integrations
 import store
+import transfer
 import sysinfo
 import ui
 import vpn
@@ -307,6 +308,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.page_dashboard()
         if path == "/apps":
             return self.page_apps()
+        if path == "/transfer":
+            return self.page_transfer()
         if path == "/api/stats":
             return self._json(self.collect_stats())
         if re.fullmatch(r"/apps/catalog/[\w.-]+", path):
@@ -361,6 +364,8 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/apps/install":
             return self.do_install(form)
+        if path == "/transfer":
+            return self.do_transfer(form)
         match = re.fullmatch(r"/apps/(\d+)/edit", path)
         if match:
             return self.do_app_edit(int(match.group(1)), form)
@@ -547,6 +552,56 @@ class Handler(BaseHTTPRequestHandler):
         self._render("Dashboard", body, "/")
 
     # Apps: Katalog + Liste
+    @staticmethod
+    def _human_size(num):
+        num = float(num or 0)
+        for unit in ("B", "KB", "MB", "GB"):
+            if num < 1024:
+                return f"{num:.0f} {unit}" if unit == "B" else f"{num:.1f} {unit}"
+            num /= 1024
+        return f"{num:.1f} TB"
+
+    def page_transfer(self):
+        try:
+            detections = transfer.scan()
+        except Exception:  # noqa: BLE001
+            detections = []
+        if not detections:
+            body = ("<a href='/apps' class='muted'>← Apps</a><h1>Übernehmen</h1>"
+                    "<div class='card muted'>Keine übernehmbare Alt-Installation gefunden.</div>")
+            return self._render("Übernehmen", body, "/apps")
+        cards = ""
+        for det in detections:
+            opts = "".join(f"<option value='{ui.esc(o['connector_id'])}'>{ui.esc(o['name'])}</option>"
+                           for o in det["options"])
+            try:
+                size = self._human_size(transfer.dir_size(det["path"]))
+            except Exception:  # noqa: BLE001
+                size = "?"
+            cards += f"""<div class="card"><form method="post" action="/transfer" class="row" style="justify-content:space-between;align-items:center;gap:12px">{ui.csrf_input(self.csrf)}
+<input type="hidden" name="path" value="{ui.esc(det['path'])}">
+<div style="min-width:0"><b class="mono">{ui.esc(det['path'])}</b>
+<div class="help" style="margin:2px 0 0">{size} · wird gesichert und eingespielt</div></div>
+<div class="row" style="flex-wrap:nowrap">
+<select name="connector_id">{opts}</select>
+<button class="btn primary" type="submit">Übernehmen</button></div></form></div>"""
+        body = (f"<a href='/apps' class='muted'>← Apps</a><h1>Alte Software übernehmen</h1>"
+                f"<p class='sub'>Gefundene Installationen werden gesichert (tmp-Backup), sauber neu "
+                f"installiert und die Daten wieder eingespielt.</p>{cards}")
+        self._render("Übernehmen", body, "/apps")
+
+    def do_transfer(self, form):
+        try:
+            app = transfer.take_over(form.get("connector_id", ""), form.get("path", ""),
+                                     form={"exposure": "external"})
+        except Exception as exc:  # noqa: BLE001
+            return self._redirect("/transfer", ("err", f"Übernahme fehlgeschlagen: {exc}"))
+        note = f"{app['name']} übernommen — Daten eingespielt."
+        warnings = app.get("warnings") or []
+        if warnings:
+            note += " Hinweise: " + "; ".join(warnings)
+        return self._redirect(f"/apps/{app['id']}", ("ok", note))
+
     def page_apps(self):
         installed = store.list_apps()
         news = connector_news()
@@ -585,7 +640,18 @@ class Handler(BaseHTTPRequestHandler):
         count = sum(1 for g in catalog.groups() if any(v["id"] in news for v in g["versions"]))
         news_tag = f' <span class="badge">{count} neu</span>' if count else ""
 
+        try:
+            importable = transfer.scan()
+        except Exception:  # noqa: BLE001
+            importable = []
+        transfer_html = ("<div class='card'><div class='row' style='justify-content:space-between;"
+                         "align-items:center;gap:12px'><div><b>Vorhandene Software gefunden</b>"
+                         f"<div class='help' style='margin:2px 0 0'>{len(importable)} übernehmbar — "
+                         "Welt/Daten sichern und in eine App einspielen</div></div>"
+                         "<a class='btn primary' href='/transfer'>Übernehmen</a></div></div>"
+                         if importable else "")
         body = f"""<h1>Apps</h1>
+{transfer_html}
 <h2>Installiert</h2>{installed_html}
 <h2>Katalog{news_tag}</h2>
 <div class="apps">{tiles}</div>"""

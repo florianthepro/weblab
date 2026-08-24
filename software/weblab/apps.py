@@ -1,6 +1,7 @@
 """App-Lebenszyklus: aus Connector + Formularwerten wird ein laufender Container."""
 import html
 import os
+import shutil
 import re
 import secrets
 import shlex
@@ -307,8 +308,9 @@ def _run_app_container(app, connector):
         network=app["network"], hostname=hostname)
 
 
-def install(connector_id, form):
-    """Neue App aus dem Katalog installieren."""
+def install(connector_id, form, seed_dir=None):
+    """Neue App aus dem Katalog installieren. seed_dir: vorhandene Daten (Backup einer
+    Alt-Installation), die vor dem ersten Start in das Datenverzeichnis gelegt werden."""
     connector = catalog.get(connector_id)
     if not connector:
         raise ValueError("Connector nicht gefunden.")
@@ -344,6 +346,9 @@ def install(connector_id, form):
     data_root = form.get("data_path") or "/var/lib/weblab/data"
     data_dir = host_data_path(slug, data_root)
     os.makedirs(data_dir, exist_ok=True)
+    if seed_dir and os.path.isdir(seed_dir):
+        # Backup der Alt-Installation vor dem ersten Start einspielen.
+        shutil.copytree(seed_dir, data_dir, symlinks=True, dirs_exist_ok=True)
 
     manage_domain = store.get_setting("manage_domain", "")
     manage_host = (form.get("manage_host") or "").strip().lower() \
@@ -364,6 +369,7 @@ def install(connector_id, form):
     }
     app_id = store.create_app(app)
     app["id"] = app_id
+    app["values"] = values          # fuer _run_app_container/_post_install (nicht in der DB-Spalte)
 
     dockerctl.pull(connector["image"])
     _run_app_container(app, connector)

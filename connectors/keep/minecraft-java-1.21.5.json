@@ -171,5 +171,28 @@
         }
       ]
     }
+  },
+  "import": {
+    "label": "Vorhandenen Java-Server übernehmen (Welt + Einstellungen)",
+    "signature": [
+      "eula.txt",
+      "server.jar",
+      "world/level.dat"
+    ],
+    "search": [
+      "/opt/minecraft",
+      "/opt/minecraft/*",
+      "/srv/minecraft",
+      "/srv/minecraft/*",
+      "/home/*/minecraft",
+      "/home/*/minecraft/*",
+      "/root/minecraft",
+      "/root/minecraft/*",
+      "/opt/*/minecraft",
+      "/var/minecraft",
+      "/minecraft",
+      "/home/*/mc",
+      "/opt/mc"
+    ]
   }
 }

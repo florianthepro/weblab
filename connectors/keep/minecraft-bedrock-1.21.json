@@ -21,7 +21,10 @@
     "EULA": "TRUE"
   },
   "fixed_ports": [
-    { "port": 19132, "protocol": "udp" }
+    {
+      "port": 19132,
+      "protocol": "udp"
+    }
   ],
   "notes": [
     "Spieler verbinden sich auf UDP-Port 19132.",
@@ -37,7 +40,10 @@
         "min": 1,
         "max": 100,
         "required": true,
-        "target": { "kind": "env", "name": "MAX_PLAYERS" }
+        "target": {
+          "kind": "env",
+          "name": "MAX_PLAYERS"
+        }
       }
     ],
     "specific": [
@@ -46,30 +52,51 @@
         "label": "Servername (in der Liste)",
         "type": "string",
         "default": "weblab Bedrock",
-        "target": { "kind": "env", "name": "SERVER_NAME" }
+        "target": {
+          "kind": "env",
+          "name": "SERVER_NAME"
+        }
       },
       {
         "key": "gamemode",
         "label": "Spielmodus",
         "type": "select",
-        "options": ["survival", "creative", "adventure"],
+        "options": [
+          "survival",
+          "creative",
+          "adventure"
+        ],
         "default": "survival",
-        "target": { "kind": "env", "name": "GAMEMODE" }
+        "target": {
+          "kind": "env",
+          "name": "GAMEMODE"
+        }
       },
       {
         "key": "difficulty",
         "label": "Schwierigkeit",
         "type": "select",
-        "options": ["peaceful", "easy", "normal", "hard"],
+        "options": [
+          "peaceful",
+          "easy",
+          "normal",
+          "hard"
+        ],
         "default": "easy",
-        "target": { "kind": "env", "name": "DIFFICULTY" }
+        "target": {
+          "kind": "env",
+          "name": "DIFFICULTY"
+        }
       },
       {
         "key": "allow_cheats",
         "label": "Cheats erlauben",
         "type": "bool",
         "default": false,
-        "target": { "kind": "env", "name": "ALLOW_CHEATS" }
+        "target": {
+          "kind": "env",
+          "name": "ALLOW_CHEATS"
+        }
       },
       {
         "key": "online_mode",
@@ -77,9 +104,34 @@
         "type": "bool",
         "default": true,
         "help": "Aus = auch ohne Xbox-Konto beitreten (unsicher).",
-        "target": { "kind": "env", "name": "ONLINE_MODE" }
+        "target": {
+          "kind": "env",
+          "name": "ONLINE_MODE"
+        }
       }
     ]
   },
-  "advanced": {}
+  "advanced": {},
+  "import": {
+    "label": "Vorhandenen Bedrock-Server übernehmen (Welten + Einstellungen)",
+    "signature": [
+      "bedrock_server",
+      "worlds"
+    ],
+    "search": [
+      "/opt/minecraft",
+      "/opt/minecraft/*",
+      "/srv/minecraft",
+      "/srv/minecraft/*",
+      "/home/*/minecraft",
+      "/home/*/minecraft/*",
+      "/root/minecraft",
+      "/root/minecraft/*",
+      "/opt/*/minecraft",
+      "/var/minecraft",
+      "/minecraft",
+      "/home/*/mc",
+      "/opt/mc"
+    ]
+  }
 }
