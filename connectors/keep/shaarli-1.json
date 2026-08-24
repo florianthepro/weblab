@@ -1,0 +1,26 @@
+{
+  "id": "shaarli-1",
+  "group": "shaarli",
+  "name": "Shaarli",
+  "version": "1",
+  "category": "Werkzeuge",
+  "icon": "🔖",
+  "summary": "Eigene Lesezeichen-Sammlung, selbst gehostet",
+  "description": "",
+  "runtime": "docker",
+  "image": "ghcr.io/shaarli/shaarli:latest",
+  "container_port": 80,
+  "protocol": "tcp",
+  "http": true,
+  "default_exposure": "external",
+  "data": {
+    "container_path": "/var/www/shaarli/data",
+    "label": "Lesezeichen + Konfiguration"
+  },
+  "env": {},
+  "notes": [
+    "Beim ersten Aufruf über die Domain Benutzername und Passwort festlegen."
+  ],
+  "fields": { "required": [], "specific": [] },
+  "advanced": {}
+}

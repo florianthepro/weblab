@@ -1,0 +1,23 @@
+{
+  "id": "privatebin-1",
+  "group": "privatebin",
+  "name": "PrivateBin",
+  "version": "1",
+  "category": "Werkzeuge",
+  "icon": "📋",
+  "summary": "Verschlüsselte Notizen/Pastes teilen (läuft von selbst)",
+  "description": "",
+  "runtime": "docker",
+  "image": "privatebin/nginx-fpm-alpine:latest",
+  "container_port": 8080,
+  "protocol": "tcp",
+  "http": true,
+  "default_exposure": "external",
+  "data": {
+    "container_path": "/srv/data",
+    "label": "Gespeicherte Pastes"
+  },
+  "env": {},
+  "fields": { "required": [], "specific": [] },
+  "advanced": {}
+}

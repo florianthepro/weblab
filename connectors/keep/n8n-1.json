@@ -1,0 +1,30 @@
+{
+  "id": "n8n-1",
+  "group": "n8n",
+  "name": "n8n",
+  "version": "1",
+  "category": "Werkzeuge",
+  "icon": "🔗",
+  "summary": "Abläufe automatisieren (Workflows, kein Code nötig)",
+  "description": "",
+  "runtime": "docker",
+  "image": "docker.n8n.io/n8nio/n8n",
+  "container_port": 5678,
+  "protocol": "tcp",
+  "http": true,
+  "default_exposure": "external",
+  "data": {
+    "container_path": "/home/node/.n8n",
+    "label": "Workflows + Einstellungen"
+  },
+  "env": {
+    "N8N_SECURE_COOKIE": "false",
+    "N8N_PROXY_HOPS": "1"
+  },
+  "notes": [
+    "Beim ersten Aufruf über die Domain ein Besitzer-Konto anlegen.",
+    "Für Webhooks in n8n unter Einstellungen die eigene Domain als Webhook-URL eintragen."
+  ],
+  "fields": { "required": [], "specific": [] },
+  "advanced": {}
+}

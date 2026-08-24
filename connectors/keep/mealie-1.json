@@ -1,0 +1,29 @@
+{
+  "id": "mealie-1",
+  "group": "mealie",
+  "name": "Mealie",
+  "version": "1",
+  "category": "Werkzeuge",
+  "icon": "🍲",
+  "summary": "Rezepte sammeln und Essen planen",
+  "description": "",
+  "runtime": "docker",
+  "image": "ghcr.io/mealie-recipes/mealie:latest",
+  "container_port": 9000,
+  "protocol": "tcp",
+  "http": true,
+  "default_exposure": "external",
+  "data": {
+    "container_path": "/app/data",
+    "label": "Rezepte + Bilder"
+  },
+  "env": {
+    "ALLOW_SIGNUP": "false",
+    "TZ": "Europe/Berlin"
+  },
+  "notes": [
+    "Erste Anmeldung: changeme@example.com / MyPassword — danach sofort ändern."
+  ],
+  "fields": { "required": [], "specific": [] },
+  "advanced": {}
+}

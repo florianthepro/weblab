@@ -1,0 +1,32 @@
+{
+  "id": "qbittorrent-1",
+  "group": "qbittorrent",
+  "name": "qBittorrent",
+  "version": "1",
+  "category": "Medien",
+  "icon": "⬇️",
+  "summary": "Download-Client mit Weboberfläche",
+  "description": "",
+  "runtime": "docker",
+  "image": "lscr.io/linuxserver/qbittorrent:latest",
+  "container_port": 8080,
+  "protocol": "tcp",
+  "http": true,
+  "default_exposure": "external",
+  "data": {
+    "container_path": "/config",
+    "label": "Konfiguration (Downloads unter /config/downloads)"
+  },
+  "env": {
+    "PUID": "1000",
+    "PGID": "1000",
+    "TZ": "Europe/Berlin",
+    "WEBUI_PORT": "8080"
+  },
+  "notes": [
+    "Das erste Anmeldepasswort steht einmalig im Container-Log (Logs der App).",
+    "Downloads landen im Datenordner unter downloads/."
+  ],
+  "fields": { "required": [], "specific": [] },
+  "advanced": {}
+}

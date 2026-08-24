@@ -1,0 +1,31 @@
+{
+  "id": "calibre-web-1",
+  "group": "calibre-web",
+  "name": "Calibre-Web",
+  "version": "1",
+  "category": "Medien",
+  "icon": "📚",
+  "summary": "E-Book-Bibliothek im Browser lesen und verwalten",
+  "description": "",
+  "runtime": "docker",
+  "image": "lscr.io/linuxserver/calibre-web:latest",
+  "container_port": 8083,
+  "protocol": "tcp",
+  "http": true,
+  "default_exposure": "external",
+  "data": {
+    "container_path": "/config",
+    "label": "Konfiguration + Bibliothek"
+  },
+  "env": {
+    "PUID": "1000",
+    "PGID": "1000",
+    "TZ": "Europe/Berlin"
+  },
+  "notes": [
+    "Erste Anmeldung: admin / admin123 — danach Passwort ändern.",
+    "Eine vorhandene Calibre-Bibliothek (metadata.db) im Datenordner auswählen."
+  ],
+  "fields": { "required": [], "specific": [] },
+  "advanced": {}
+}
