@@ -528,8 +528,33 @@ def exchange_code(client_id, client_secret, redirect_uri, code, verifier):
 # --------------------------------------------------------------------------
 # Mehrere Cloudflare-Konten: Zonen aggregieren, Konto je Zone finden
 # --------------------------------------------------------------------------
+_DNS_CACHE = {"zones": {}, "records": {}}
+
+
+def invalidate_dns_cache():
+    _DNS_CACHE["zones"].clear()
+    _DNS_CACHE["records"].clear()
+
+
+def cached_records(token, zone_name):
+    """DNS-Einträge einer Zone, kurz zwischengespeichert (schnellere Netzwerk-Seite)."""
+    key = (token, zone_name)
+    ent = _DNS_CACHE["records"].get(key)
+    if ent and time.time() - ent[0] < 120:
+        return ent[1]
+    recs, _err = Cloudflare(token).list_records(zone_name)
+    _DNS_CACHE["records"][key] = (time.time(), recs)
+    return recs
+
+
 def all_zones(accounts):
-    """Zonen aller Konten: [{name, token, account_label, proxied_default}]."""
+    """Zonen aller Konten: [{name, token, account_label, proxied_default}].
+    Kurz zwischengespeichert, damit die Netzwerk-Seite nicht bei jedem Aufruf alle
+    Konten neu abfragt."""
+    ckey = tuple(sorted(a.get("token", "") for a in (accounts or []) if a.get("token")))
+    ent = _DNS_CACHE["zones"].get(ckey)
+    if ent and time.time() - ent[0] < 120:
+        return ent[1]
     seen, result = set(), []
     for acc in accounts or []:
         token = acc.get("token")
@@ -542,6 +567,7 @@ def all_zones(accounts):
                 result.append({"name": name, "token": token,
                                "account": acc.get("label", "")})
     result.sort(key=lambda z: z["name"])
+    _DNS_CACHE["zones"][ckey] = (time.time(), result)
     return result
 
 

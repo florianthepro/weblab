@@ -1412,6 +1412,50 @@ Adresse hier eintragen (der Schlüssel wird nur für diesen Ausgang gespeichert)
 <button class="btn primary" type="submit">Hinzufügen</button></form>"""
         return ui.modal("vpnDialog", "VPN-Ausgang hinzufügen", inner)
 
+    def _managed_hosts(self):
+        hosts = set()
+        md = store.get_setting("manage_domain", "")
+        if md:
+            hosts.add(md)
+        for app in store.list_apps():
+            for h in (app.get("domain"), app.get("manage_host")):
+                if h:
+                    hosts.add(h)
+        return hosts
+
+    def _orphan_dns_html(self):
+        accounts = store.cf_accounts()
+        server_ip = store.get_setting("server_ip", "")
+        if not accounts or not server_ip:
+            return ""
+        managed = self._managed_hosts()
+        orphans = []
+        for zone in integrations.all_zones(accounts):
+            for r in integrations.cached_records(zone["token"], zone["name"]):
+                if (r.get("type") == "A" and r.get("content") == server_ip
+                        and r.get("name") not in managed):
+                    orphans.append((zone, r))
+        if not orphans:
+            return ""
+        rows = "".join(
+            f"<tr><td class='mono'>{ui.esc(r.get('name'))}</td>"
+            f"<td class='mono'>{ui.esc(r.get('content'))}</td>"
+            f"<td><form method='post' action='/network' style='display:inline'>{ui.csrf_input(self.csrf)}"
+            f"<input type='hidden' name='action' value='dns_delete'>"
+            f"<input type='hidden' name='zone' value=\"{ui.esc(zone['name'])}\">"
+            f"<input type='hidden' name='record_id' value=\"{ui.esc(r.get('id'))}\">"
+            f"<button class='btn sm danger'>Löschen</button></form></td></tr>"
+            for zone, r in orphans)
+        allbtn = (f"<form method='post' action='/network' style='margin-top:10px'>{ui.csrf_input(self.csrf)}"
+                  f"<input type='hidden' name='action' value='dns_cleanup'>"
+                  f"<button class='btn danger' onclick=\"return confirm('Alle verwaisten Eintraege loeschen?')\">"
+                  f"Alle {len(orphans)} loeschen</button></form>")
+        return ui.section("Verwaiste DNS-Einträge",
+            "<div class='card'><p class='help'>Zeigen auf diesen Server, gehören aber zu keiner App "
+            "(meist von einer alten Installation). Verwaltungs-Domain und aktuelle App-Einträge sind "
+            f"nicht dabei.</p><div class='tbl-wrap'><table><tr><th>Name</th><th>Ziel</th><th></th></tr>"
+            f"{rows}</table></div>{allbtn}</div>")
+
     def _dns_records_html(self):
         accounts = store.cf_accounts()
         server_ip = store.get_setting("server_ip", "")
@@ -1420,7 +1464,7 @@ Adresse hier eintragen (der Schlüssel wird nur für diesen Ausgang gespeichert)
             return ""
         sections = ""
         for zone in zones:
-            rows, error = integrations.Cloudflare(zone["token"]).list_records(zone["name"])
+            rows = integrations.cached_records(zone["token"], zone["name"]); error = None
             rr = ""
             for record in rows:
                 mark = (" <span class='pill run'>dieser Server</span>"
@@ -1523,6 +1567,7 @@ Adresse hier eintragen (der Schlüssel wird nur für diesen Ausgang gespeichert)
 <button class="btn" type="submit" style="margin-top:22px">Speichern</button></form></div>
 <h2>DNS</h2>
 <div class="card">{self._cloudflare_block()}</div>
+{self._orphan_dns_html()}
 {ui.section("DNS-Einträge", self._dns_records_html() or "<p class='muted'>Kein Konto verbunden.</p>")}
 {ui.section("VPN", self._vpn_block())}
 {ui.section("Offene Ports", ext + ui.section("Intern", internal))}
@@ -1546,8 +1591,23 @@ Adresse hier eintragen (der Schlüssel wird nur für diesen Ausgang gespeichert)
                 if not token:
                     return self._redirect("/network", ("err", "Kein Konto für diese Domain."))
                 ok, err = integrations.Cloudflare(token).delete_record(zone, form.get("record_id", ""))
+                integrations.invalidate_dns_cache()
                 return self._redirect("/network", ("ok", "Eintrag gelöscht.") if ok
                                       else ("err", err or "Fehler"))
+            if action == "dns_cleanup":
+                accounts = store.cf_accounts()
+                server_ip = store.get_setting("server_ip", "")
+                managed = self._managed_hosts()
+                deleted = 0
+                for zone in integrations.all_zones(accounts):
+                    cf = integrations.Cloudflare(zone["token"])
+                    for r in integrations.cached_records(zone["token"], zone["name"]):
+                        if (r.get("type") == "A" and r.get("content") == server_ip
+                                and r.get("name") not in managed):
+                            ok, _ = cf.delete_record(zone["name"], r.get("id"))
+                            deleted += 1 if ok else 0
+                integrations.invalidate_dns_cache()
+                return self._redirect("/network", ("ok", f"{deleted} verwaiste Einträge gelöscht."))
             if action == "cf_oauth":
                 return self._cf_oauth_start(form)
             if action == "general":
@@ -1568,6 +1628,7 @@ Adresse hier eintragen (der Schlüssel wird nur für diesen Ausgang gespeichert)
                 if not ok:
                     return self._redirect("/network", ("err", f"Token ungültig: {info}"))
                 store.add_cf_account("API-Token", token)
+                integrations.invalidate_dns_cache()
                 store.set_setting("cf_status", "verknüpft")
                 return self._redirect("/network", ("ok", "DNS-Konto verbunden."))
             if action == "cf_link":
@@ -1578,10 +1639,12 @@ Adresse hier eintragen (der Schlüssel wird nur für diesen Ausgang gespeichert)
                 if not token:
                     return self._redirect("/network", ("err", f"Verknüpfung fehlgeschlagen: {err}"))
                 store.add_cf_account(email or "Cloudflare", token)
+                integrations.invalidate_dns_cache()
                 store.set_setting("cf_status", "verknüpft")
                 return self._redirect("/network", ("ok", "DNS-Konto verbunden."))
             if action == "cf_unlink":
                 store.remove_cf_account(form.get("account_id", ""))
+                integrations.invalidate_dns_cache()
                 if not store.cf_accounts():
                     store.set_setting("cf_status", "nicht verknüpft")
                 return self._redirect("/network", ("ok", "Verknüpfung gelöst."))
