@@ -1,4 +1,5 @@
 """SQLite-Speicher: Einstellungen, Benutzer, installierte Apps."""
+import contextlib
 import hashlib
 import json
 import os
@@ -9,13 +10,27 @@ import time
 DB_PATH = os.environ.get("WEBLAB_DB", "/var/lib/weblab/weblab.db")
 
 
+@contextlib.contextmanager
 def connect():
+    """Verbindung als Kontextmanager: committet bei Erfolg, schließt immer.
+    busy_timeout lässt parallele Zugriffe warten statt zu scheitern (Threading-Server)."""
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     conn = sqlite3.connect(DB_PATH, timeout=15)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=8000")
     conn.execute("PRAGMA foreign_keys=ON")
-    return conn
+    try:
+        conn.execute("PRAGMA journal_mode=WAL")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        yield conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 SCHEMA = """

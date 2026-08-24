@@ -63,8 +63,16 @@ def connector_news():
 
 
 # Sitzungen (signierte Cookies) + CSRF
+_SECRET = None
+
+
 def _secret():
-    return (store.get_setting("session_secret") or "insecure").encode()
+    """Sitzungs-Schlüssel einmal laden und im Speicher halten — der Login hängt
+    dann nicht mehr an einem DB-Zugriff pro Anfrage."""
+    global _SECRET
+    if not _SECRET:
+        _SECRET = (store.get_setting("session_secret") or "").encode()
+    return _SECRET or b"weblab-insecure-fallback"
 
 
 def sign_session(payload):

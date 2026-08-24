@@ -1,0 +1,31 @@
+{
+  "id": "adguard-home-1",
+  "group": "adguard-home",
+  "name": "AdGuard Home",
+  "version": "1",
+  "category": "Netzwerk",
+  "icon": "🛡️",
+  "summary": "Werbe- und Tracking-Filter fürs ganze Netz (DNS)",
+  "description": "",
+  "runtime": "docker",
+  "image": "adguard/adguardhome",
+  "container_port": 3000,
+  "protocol": "tcp",
+  "http": true,
+  "default_exposure": "external",
+  "data": {
+    "container_path": "/opt/adguardhome",
+    "label": "Konfiguration + Filterlisten"
+  },
+  "env": {},
+  "fixed_ports": [
+    { "port": 53, "protocol": "udp" },
+    { "port": 53, "protocol": "tcp" }
+  ],
+  "notes": [
+    "Erste Einrichtung über die Weboberfläche; als Admin-Port dort 3000 wählen.",
+    "DNS läuft auf Port 53 — muss auf dem Server frei sein (ggf. systemd-resolved anpassen)."
+  ],
+  "fields": { "required": [], "specific": [] },
+  "advanced": {}
+}

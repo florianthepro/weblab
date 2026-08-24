@@ -123,8 +123,12 @@ def port_binding(exposure, host_port, container_port, protocol, connector=None):
         host = "0.0.0.0"
     fixed = fixed_ports(connector or {})
     if fixed:
-        # Host-Port == Container-Port, sonst stimmen MX-Einträge und Mailprogramme nicht.
-        return [(f"{host}:{p['port']}", p["port"], p.get("protocol", "tcp")) for p in fixed]
+        # Feste Dienst-Ports (Host==Container), z. B. Mail 25 oder DNS 53.
+        bindings = [(f"{host}:{p['port']}", p["port"], p.get("protocol", "tcp")) for p in fixed]
+        # http-Apps brauchen zusätzlich die Weboberfläche am Proxy-Port (nur lokal, Caddy davor).
+        if (connector or {}).get("http") and container_port not in [p["port"] for p in fixed]:
+            bindings.append((f"127.0.0.1:{host_port}", container_port, "tcp"))
+        return bindings
     return [(f"{host}:{host_port}", container_port, protocol)]
 
 
@@ -302,9 +306,10 @@ def install(connector_id, form):
     exposure = form.get("exposure") or connector.get("default_exposure") or "external"
     container_port = int(connector.get("container_port") or 8080)
     fixed = fixed_ports(connector)
-    if fixed:
+    if fixed and not connector.get("http"):
         host_port = fixed[0]["port"]          # Dienste-Ports stehen fest (z. B. Mail 25)
     else:
+        # http-Apps (auch mit festen Dienst-Ports) bekommen einen freien Proxy-Port.
         host_port = form.get("host_port")
         host_port = int(host_port) if str(host_port or "").isdigit() else \
             sysinfo.free_port(taken=store.used_host_ports())
