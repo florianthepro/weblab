@@ -168,8 +168,7 @@
     "label": "Vorhandenen Server als Crossplay übernehmen (Welt + Einstellungen)",
     "signature": [
       "eula.txt",
-      "server.jar",
-      "world/level.dat"
+      "server.properties"
     ],
     "search": [
       "/opt/minecraft",
@@ -184,7 +183,16 @@
       "/var/minecraft",
       "/minecraft",
       "/home/*/mc",
-      "/opt/mc"
-    ]
+      "/opt/mc",
+      "/var/lib/docker/volumes/*/_data",
+      "/opt/*-data",
+      "/opt/*/data",
+      "/srv/*/data",
+      "/home/*/*/data",
+      "/home/*/mc-data",
+      "/srv/mc"
+    ],
+    "properties": "server.properties",
+    "level_env": "LEVEL"
   }
 }

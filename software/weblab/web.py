@@ -489,8 +489,11 @@ class Handler(BaseHTTPRequestHandler):
             return self._redirect("/login", ("err", "Benutzer oder Passwort falsch."))
         payload = {"user": user["username"], "uid": user["id"],
                    "sid": secrets.token_hex(8), "exp": time.time() + SESSION_MAX_AGE}
+        # SameSite=Lax (nicht Strict): das Sitzungs-Cookie wird auch bei der
+        # HTTP->HTTPS-Umschaltung mitgeschickt (kein erneuter Login noetig). CSRF ist
+        # ueber eigene Tokens abgesichert.
         cookie = (f"{COOKIE}={sign_session(payload)}; Path=/; Max-Age={SESSION_MAX_AGE}; "
-                  f"HttpOnly; SameSite=Strict")
+                  f"HttpOnly; SameSite=Lax")
         if self.headers.get("X-Forwarded-Proto") == "https":
             cookie += "; Secure"
         return self._send("", 303, "text/plain", {"Location": "/", "Set-Cookie": cookie})

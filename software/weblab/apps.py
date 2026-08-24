@@ -278,6 +278,7 @@ def _run_app_container(app, connector):
     volumes = ([(data_dir, connector.get("data", {}).get("container_path", "/data"))]
                if connector.get("data") else [])
     env = env_for(connector, app["values"])
+    env.update(app.get("import_env") or {})     # z. B. LEVEL fuer eine uebernommene Welt
     ports = port_binding(app["exposure"], app["host_port"], app["container_port"],
                          connector.get("protocol", "tcp"), connector)
     hostname = container_hostname(connector, app["values"])
@@ -308,9 +309,10 @@ def _run_app_container(app, connector):
         network=app["network"], hostname=hostname)
 
 
-def install(connector_id, form, seed_dir=None):
+def install(connector_id, form, seed_dir=None, extra_env=None):
     """Neue App aus dem Katalog installieren. seed_dir: vorhandene Daten (Backup einer
-    Alt-Installation), die vor dem ersten Start in das Datenverzeichnis gelegt werden."""
+    Alt-Installation), die vor dem ersten Start ins Datenverzeichnis gelegt werden.
+    extra_env: zusaetzliche Container-Env (z. B. LEVEL fuer eine uebernommene Welt)."""
     connector = catalog.get(connector_id)
     if not connector:
         raise ValueError("Connector nicht gefunden.")
@@ -370,6 +372,7 @@ def install(connector_id, form, seed_dir=None):
     app_id = store.create_app(app)
     app["id"] = app_id
     app["values"] = values          # fuer _run_app_container/_post_install (nicht in der DB-Spalte)
+    app["import_env"] = dict(extra_env or {})
 
     dockerctl.pull(connector["image"])
     _run_app_container(app, connector)

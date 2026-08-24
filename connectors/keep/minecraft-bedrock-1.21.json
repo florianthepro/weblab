@@ -115,8 +115,11 @@
   "import": {
     "label": "Vorhandenen Bedrock-Server übernehmen (Welten + Einstellungen)",
     "signature": [
-      "bedrock_server",
-      "worlds"
+      "worlds",
+      "server.properties"
+    ],
+    "signature_not": [
+      "eula.txt"
     ],
     "search": [
       "/opt/minecraft",
@@ -131,7 +134,24 @@
       "/var/minecraft",
       "/minecraft",
       "/home/*/mc",
-      "/opt/mc"
-    ]
+      "/opt/mc",
+      "/var/lib/docker/volumes/*/_data",
+      "/opt/*-data",
+      "/opt/*/data",
+      "/srv/*/data",
+      "/home/*/*/data",
+      "/home/*/mc-data",
+      "/srv/mc"
+    ],
+    "properties": "server.properties",
+    "level_env": "LEVEL_NAME",
+    "properties_map": {
+      "server-name": "server_name",
+      "gamemode": "gamemode",
+      "difficulty": "difficulty",
+      "max-players": "max_players",
+      "online-mode": "online_mode",
+      "allow-cheats": "allow_cheats"
+    }
   }
 }
