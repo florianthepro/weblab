@@ -215,17 +215,26 @@ def sync_proxy():
     manage_domain = store.get_setting("manage_domain", "")
     routes = []
     panel_hosts = []
+    cert_hosts = []
     for app in store.list_apps():
         if app.get("manage_host"):
             panel_hosts.append(app["manage_host"])
         connector = catalog.get(app["connector_id"])
-        if not connector or not connector.get("http") or not app.get("domain"):
+        if not connector:
+            continue
+        if connector.get("tls_cert"):
+            # Dienste mit eigenem TLS (Mailserver): Caddy soll ihr Zertifikat holen,
+            # auch wenn ihre Domain nicht die Verwaltungs-Domain ist.
+            fqdn = container_hostname(connector, app.get("values") or {})
+            if fqdn:
+                cert_hosts.append(fqdn)
+        if not connector.get("http") or not app.get("domain"):
             continue
         routes.append({"domain": app["domain"], "port": app["host_port"], "name": app["name"]})
     access = store.get_setting("manage_access", "both")
     domain_ok = store.get_setting("domain_ok", "1") != "0"
     return integrations.write_caddyfile_safe(manage_domain, routes, panel_hosts=panel_hosts,
-                                             access=access, domain_ok=domain_ok)
+                                             access=access, domain_ok=domain_ok, cert_hosts=cert_hosts)
 
 
 def _ufw(*args):

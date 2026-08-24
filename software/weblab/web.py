@@ -1277,6 +1277,7 @@ ProtonVPN. Privaten Schlüssel und Adresse aus der heruntergeladenen WireGuard-K
                 access = form.get("manage_access") or "both"
                 store.set_setting("manage_access", access if access in ("both", "domain", "ip") else "both")
                 store.set_setting("domain_ok", "1")     # nach Aenderung frisch pruefen
+                _clear_domain_banner()                  # alten Domain-Hinweis entfernen
                 ok, err = appsvc.sync_proxy()
                 return self._redirect("/network", ("ok", "Gespeichert.") if ok
                                       else ("err", f"Proxy: {err}"))
@@ -1681,11 +1682,27 @@ def _refresh_service_certs():
             dockerctl.restart(app["slug"])
 
 
+DOMAIN_DOWN_MARK = "nicht erreichbar"
+
+
+def _domain_down_banner(domain):
+    return (f"Die Domain {domain} ist gerade {DOMAIN_DOWN_MARK} — die Verwaltung laeuft "
+            f"vorerst ueber die IP-Adresse. Sobald der DNS-Eintrag wieder auf diesen "
+            f"Server zeigt, schaltet sich die Domain von selbst frei.")
+
+
+def _clear_domain_banner():
+    """Nur den automatischen Domain-Hinweis entfernen, fremde Banner nicht anfassen."""
+    if DOMAIN_DOWN_MARK in store.get_setting("banner", ""):
+        store.set_setting("banner", "")
+
+
 def _domain_watchdog():
-    """Prueft regelmaessig, ob die Verwaltungs-Domain noch aufloest. Faellt der
-    DNS-Eintrag weg, bleibt das Panel automatisch ueber die IP erreichbar (Caddy
-    wird neu geschrieben); kommt die Domain zurueck, wird sie wieder freigeschaltet."""
-    misses = 0
+    """Prueft regelmaessig, ob die Verwaltungs-Domain noch auf DIESEN Server zeigt.
+    Zeigt sie woandershin oder ist der Eintrag weg, bleibt das Panel automatisch ueber
+    die IP erreichbar (Caddy wird neu geschrieben); kommt die Domain zurueck, wird sie
+    wieder freigeschaltet. Beidseitige Hysterese gegen kurzes DNS-Flackern."""
+    misses = ups = 0
     while True:
         time.sleep(WATCHDOG_INTERVAL)
         try:
@@ -1696,23 +1713,33 @@ def _domain_watchdog():
             domain = store.get_setting("manage_domain", "")
             access = store.get_setting("manage_access", "both")
             if not domain or access == "ip":
+                _clear_domain_banner()      # veralteten Hinweis entfernen
+                misses = ups = 0
                 continue
-            up = integrations.domain_up(domain)
-            misses = 0 if up else misses + 1
-            healthy = up or misses < 2      # erst nach 2 Fehlversuchen umschalten
+            up = integrations.domain_up(domain, store.get_setting("server_ip", ""))
+            if up:
+                ups += 1
+                misses = 0
+            else:
+                misses += 1
+                ups = 0
             prev = store.get_setting("domain_ok", "1") != "0"
+            # Zustand nur nach 2 gleichen Messungen in Folge wechseln (kein Flattern).
+            if prev and misses >= 2:
+                healthy = False
+            elif not prev and ups >= 2:
+                healthy = True
+            else:
+                healthy = prev
             if healthy != prev:
                 store.set_setting("domain_ok", "1" if healthy else "0")
                 appsvc.sync_proxy()
                 if not healthy:
-                    store.set_setting("banner",
-                        f"Die Domain {domain} ist gerade nicht erreichbar — die Verwaltung "
-                        f"laeuft vorerst ueber die IP-Adresse. Sobald der DNS-Eintrag wieder "
-                        f"auf diesen Server zeigt, schaltet sich die Domain von selbst frei.")
-                else:
                     cur = store.get_setting("banner", "")
-                    if domain in cur and "nicht erreichbar" in cur:
-                        store.set_setting("banner", "")
+                    if not cur or DOMAIN_DOWN_MARK in cur:   # fremden Banner nicht ueberschreiben
+                        store.set_setting("banner", _domain_down_banner(domain))
+                else:
+                    _clear_domain_banner()
         except Exception:  # noqa: BLE001 - der Watchdog darf das Panel nie stoppen
             pass
 

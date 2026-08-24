@@ -7,6 +7,8 @@ import os
 import shutil
 import socket
 import subprocess
+import tempfile
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -41,12 +43,14 @@ def http_json(url, method="GET", headers=None, data=None, timeout=25):
 
 
 def render_caddyfile(manage_domain, app_routes, email=None, panel_hosts=None,
-                     access="both", domain_ok=True):
+                     access="both", domain_ok=True, cert_hosts=None):
     """app_routes: [{'domain':..., 'port':...}] — nur Apps mit Domain und http=true.
     panel_hosts: zusätzliche Hostnamen (App-Verwaltungs-Subdomains), die auf das Panel zeigen.
     access: 'both' | 'domain' | 'ip' — worüber die Verwaltung erreichbar ist.
     domain_ok: zeigt der DNS-Eintrag noch hierher? Wenn nicht, bleibt das Panel
-               immer über die IP erreichbar (kein Aussperren)."""
+               immer über die IP erreichbar (kein Aussperren).
+    cert_hosts: Hostnamen von Diensten (z. B. Mailserver), für die Caddy nur ein
+                Zertifikat holen soll — unabhängig vom Zugangsmodus."""
     email = email or (f"admin@{manage_domain}" if manage_domain else "")
     panel_hosts = [h for h in (panel_hosts or []) if h]
     # Panel auf der Domain nur, wenn gewünscht UND die Domain erreichbar ist.
@@ -74,8 +78,9 @@ def render_caddyfile(manage_domain, app_routes, email=None, panel_hosts=None,
     if ip_serves_panel:
         out.append(f"\t\treverse_proxy 127.0.0.1:{PANEL_PORT}")
     else:
-        # Nur-Domain-Betrieb: IP-Aufruf zur Domain umleiten.
-        out.append(f"\t\tredir https://{manage_domain}{{uri}} permanent")
+        # Nur-Domain-Betrieb: IP-Aufruf zur Domain umleiten (temporär, damit der
+        # Browser bei Failover/Rückschaltung die IP sofort wieder direkt erreicht).
+        out.append(f"\t\tredir https://{manage_domain}{{uri}} temporary")
     out.append("\t}")
     out.append("}")
     if domain_serves:
@@ -89,19 +94,30 @@ def render_caddyfile(manage_domain, app_routes, email=None, panel_hosts=None,
             continue
         out += ["", f"# App: {route.get('name', route['domain'])}", f"{route['domain']} {{",
                 "\tencode gzip zstd", f"\treverse_proxy 127.0.0.1:{route['port']}", "}"]
+    known = {manage_domain, *panel_hosts, *app_domains}
+    for host in (cert_hosts or []):
+        if host and host not in known:
+            known.add(host)
+            # Nur das Zertifikat holen; der Dienst (Mailserver) nutzt es selbst.
+            out += ["", f"# Zertifikat für Dienst {host}", f"{host} {{",
+                    "\trespond 204", "}"]
     return "\n".join(out) + "\n"
 
 
-def domain_up(domain):
-    """True, wenn die Domain noch einen DNS-Eintrag hat. Ein entfernter Eintrag
-    (NXDOMAIN / keine Adresse) gilt als 'unten' — das Panel bleibt dann über die
-    IP erreichbar, damit man sich nicht aussperrt."""
+def domain_up(domain, server_ip=""):
+    """True, wenn die Domain (noch) auf DIESEN Server zeigt. Fehlt der Eintrag
+    (NXDOMAIN) oder zeigt er woandershin, gilt sie als 'unten' — das Panel bleibt
+    dann über die IP erreichbar, damit man sich nicht aussperrt. Ist die eigene IP
+    unbekannt, reicht ein beliebiger Eintrag (kein Fehlalarm)."""
     if not domain:
         return True
     try:
-        return bool(socket.getaddrinfo(domain, None))
+        addrs = {info[4][0] for info in socket.getaddrinfo(domain, None)}
     except (socket.gaierror, OSError):
         return False
+    if not addrs:
+        return False
+    return (server_ip in addrs) if server_ip else True
 
 
 # --- Let's-Encrypt-Zertifikate von Caddy an Dienste weiterreichen (z. B. Mailserver) ---
@@ -134,40 +150,62 @@ def export_cert(domain):
     crt, key = caddy_cert_paths(domain)
     if not crt or not key:
         return False
+    try:                                    # beide zusammen lesen (alles-oder-nichts,
+        new_crt = open(crt, "rb").read()    # damit nie ein zusammengewürfeltes Paar
+        new_key = open(key, "rb").read()    # aus Zertifikat+altem Schlüssel entsteht)
+    except OSError:
+        return False
+    if not new_crt or not new_key:
+        return False
     out = os.path.join(CERT_DIR, domain)
     os.makedirs(out, exist_ok=True)
     changed = False
-    for src, name, mode in ((crt, "fullchain.pem", 0o644), (key, "privkey.pem", 0o600)):
+    for data, name, mode in ((new_crt, "fullchain.pem", 0o644), (new_key, "privkey.pem", 0o600)):
         dst = os.path.join(out, name)
-        try:
-            new = open(src, "rb").read()
-        except OSError:
-            continue
         old = open(dst, "rb").read() if os.path.exists(dst) else None
-        if new != old:
-            shutil.copyfile(src, dst)
-            os.chmod(dst, mode)
+        if data != old:
+            fd, tmp = tempfile.mkstemp(dir=out, prefix="." + name + ".", suffix=".tmp")
+            with os.fdopen(fd, "wb") as fh:
+                fh.write(data)
+            os.chmod(tmp, mode)
+            os.replace(tmp, dst)            # atomar ersetzen
             changed = True
     return changed
 
 
+_caddy_lock = threading.Lock()
+
+
 def write_caddy(manage_domain, app_routes, email=None, panel_hosts=None,
-                access="both", domain_ok=True):
-    content = render_caddyfile(manage_domain, app_routes, email, panel_hosts, access, domain_ok)
-    tmp = CADDYFILE + ".tmp"
-    os.makedirs(os.path.dirname(CADDYFILE), exist_ok=True)
-    with open(tmp, "w", encoding="utf-8") as fh:
-        fh.write(content)
-    check = subprocess.run(["caddy", "validate", "--config", tmp],
-                           capture_output=True, text=True, timeout=60)
-    if check.returncode != 0:
-        os.unlink(tmp)
-        raise RuntimeError(f"Caddy-Konfiguration ungültig: {check.stderr[-400:]}")
-    os.replace(tmp, CADDYFILE)
-    reload_proc = subprocess.run(["systemctl", "reload", "caddy"],
-                                 capture_output=True, text=True, timeout=60)
-    if reload_proc.returncode != 0:
-        subprocess.run(["systemctl", "restart", "caddy"], capture_output=True, text=True, timeout=90)
+                access="both", domain_ok=True, cert_hosts=None):
+    content = render_caddyfile(manage_domain, app_routes, email, panel_hosts,
+                               access, domain_ok, cert_hosts)
+    # Ein Schloss, damit Watchdog- und Anfrage-Threads sich nicht in die Quere kommen.
+    with _caddy_lock:
+        os.makedirs(os.path.dirname(CADDYFILE), exist_ok=True)
+        try:
+            if os.path.exists(CADDYFILE) and \
+                    open(CADDYFILE, encoding="utf-8").read() == content:
+                return content          # keine Änderung -> kein Neuladen
+        except OSError:
+            pass
+        fd, tmp = tempfile.mkstemp(dir=os.path.dirname(CADDYFILE),
+                                   prefix=".Caddyfile.", suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fh.write(content)
+            check = subprocess.run(["caddy", "validate", "--config", tmp],
+                                   capture_output=True, text=True, timeout=60)
+            if check.returncode != 0:
+                raise RuntimeError(f"Caddy-Konfiguration ungültig: {check.stderr[-400:]}")
+            os.replace(tmp, CADDYFILE)
+        finally:
+            if os.path.exists(tmp):
+                os.unlink(tmp)
+        reload_proc = subprocess.run(["systemctl", "reload", "caddy"],
+                                     capture_output=True, text=True, timeout=60)
+        if reload_proc.returncode != 0:
+            subprocess.run(["systemctl", "restart", "caddy"], capture_output=True, text=True, timeout=90)
     return content
 
 
@@ -313,10 +351,10 @@ def plugin_download_url(source, project_id, loader=None, game_versions=None):
 
 
 def write_caddyfile_safe(manage_domain, app_routes, email=None, panel_hosts=None,
-                         access="both", domain_ok=True):
+                         access="both", domain_ok=True, cert_hosts=None):
     """Wie write_caddy, wirft aber nicht."""
     try:
-        write_caddy(manage_domain, app_routes, email, panel_hosts, access, domain_ok)
+        write_caddy(manage_domain, app_routes, email, panel_hosts, access, domain_ok, cert_hosts)
         return True, None
     except Exception as exc:  # noqa: BLE001 - bewusst: Proxy-Fehler nur melden
         return False, str(exc)
