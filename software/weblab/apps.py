@@ -265,20 +265,33 @@ def _run_app_container(app, connector):
         os.makedirs(data_dir, exist_ok=True)
     volumes = ([(data_dir, connector.get("data", {}).get("container_path", "/data"))]
                if connector.get("data") else [])
+    env = env_for(connector, app["values"])
     ports = port_binding(app["exposure"], app["host_port"], app["container_port"],
                          connector.get("protocol", "tcp"), connector)
     hostname = container_hostname(connector, app["values"])
+    # Dienste mit eigenem TLS (z. B. Mailserver): das von Caddy automatisch geholte
+    # Let's-Encrypt-Zertifikat einbinden. Fehlt es noch, bleibt es beim Selbstsignierten
+    # des Dienstes (kein Ausfall); der Watchdog liefert es nach, sobald Caddy es hat.
+    if connector.get("tls_cert") and hostname:
+        try:
+            certdir = os.path.join(integrations.CERT_DIR, hostname)
+            os.makedirs(certdir, exist_ok=True)
+            integrations.export_cert(hostname)
+            volumes.append((certdir, f"/etc/letsencrypt/live/{hostname}:ro"))
+            env["SSL_DOMAIN"] = hostname
+        except Exception:  # noqa: BLE001 - Zertifikat ist optional, niemals Abbruch
+            pass
     egress = store.vpn_egress_get(app.get("egress_id")) if app.get("egress_id") else None
     if egress:
         input_ports = [cp for (_bind, cp, _proto) in ports]
         gluetun_name = vpn.egress_up(app["slug"], egress, ports, input_ports)
         return dockerctl.run_container(
-            slug=app["slug"], image=connector["image"], env=env_for(connector, app["values"]),
+            slug=app["slug"], image=connector["image"], env=env,
             volumes=volumes, cpu=app["cpu"], ram_mb=app["ram_mb"], hostname=hostname,
             network_mode=f"container:{gluetun_name}")
     vpn.egress_down(app["slug"])   # evtl. früheren Ausgang entfernen
     return dockerctl.run_container(
-        slug=app["slug"], image=connector["image"], env=env_for(connector, app["values"]),
+        slug=app["slug"], image=connector["image"], env=env,
         ports=ports, volumes=volumes, cpu=app["cpu"], ram_mb=app["ram_mb"],
         network=app["network"], hostname=hostname)
 

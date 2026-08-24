@@ -2,7 +2,9 @@
 import base64
 import hashlib
 import json
+import glob
 import os
+import shutil
 import socket
 import subprocess
 import time
@@ -100,6 +102,53 @@ def domain_up(domain):
         return bool(socket.getaddrinfo(domain, None))
     except (socket.gaierror, OSError):
         return False
+
+
+# --- Let's-Encrypt-Zertifikate von Caddy an Dienste weiterreichen (z. B. Mailserver) ---
+CADDY_STORAGE = os.environ.get("WEBLAB_CADDY_STORAGE", "/var/lib/caddy/.local/share/caddy")
+CERT_DIR = os.environ.get("WEBLAB_CERT_DIR", "/var/lib/weblab/certs")
+
+
+def caddy_cert_paths(domain):
+    """(crt, key) des von Caddy verwalteten Zertifikats für die Domain — oder (None, None).
+    Caddy holt und erneuert diese Zertifikate automatisch (Let's Encrypt/ZeroSSL)."""
+    if not domain:
+        return None, None
+    base = os.path.join(CADDY_STORAGE, "certificates")
+    crt = sorted(glob.glob(os.path.join(base, "*", domain, f"{domain}.crt")))
+    key = sorted(glob.glob(os.path.join(base, "*", domain, f"{domain}.key")))
+    return (crt[0], key[0]) if crt and key else (None, None)
+
+
+def exported_cert_dir(domain):
+    """Pfad mit dem exportierten Zertifikat, falls vorhanden — sonst None."""
+    out = os.path.join(CERT_DIR, domain)
+    return out if domain and os.path.exists(os.path.join(out, "fullchain.pem")) else None
+
+
+def export_cert(domain):
+    """Kopiert Caddys Zertifikat in einen stabilen Pfad (fullchain.pem/privkey.pem),
+    aus dem Dienste wie der Mailserver lesen. Gibt True zurück, wenn sich dabei etwas
+    geändert hat (neu oder erneuert). Best-effort: ohne Zertifikat passiert nichts —
+    der Dienst nutzt dann sein Selbstsigniertes weiter (kein Ausfall)."""
+    crt, key = caddy_cert_paths(domain)
+    if not crt or not key:
+        return False
+    out = os.path.join(CERT_DIR, domain)
+    os.makedirs(out, exist_ok=True)
+    changed = False
+    for src, name, mode in ((crt, "fullchain.pem", 0o644), (key, "privkey.pem", 0o600)):
+        dst = os.path.join(out, name)
+        try:
+            new = open(src, "rb").read()
+        except OSError:
+            continue
+        old = open(dst, "rb").read() if os.path.exists(dst) else None
+        if new != old:
+            shutil.copyfile(src, dst)
+            os.chmod(dst, mode)
+            changed = True
+    return changed
 
 
 def write_caddy(manage_domain, app_routes, email=None, panel_hosts=None,

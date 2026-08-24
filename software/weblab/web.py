@@ -1668,6 +1668,19 @@ ProtonVPN. Privaten Schlüssel und Adresse aus der heruntergeladenen WireGuard-K
 WATCHDOG_INTERVAL = int(os.environ.get("WEBLAB_WATCHDOG_SEC", "180"))
 
 
+def _refresh_service_certs():
+    """Von Caddy automatisch geholte Let's-Encrypt-Zertifikate an Dienste weiterreichen,
+    die ein eigenes TLS brauchen (Mailserver). Aendert sich das Zertifikat, wird der
+    Dienst kurz neu gestartet (kein Neu-Erstellen des Containers), damit er es liest."""
+    for app in store.list_apps():
+        con = catalog.get(app["connector_id"]) or {}
+        if not con.get("tls_cert"):
+            continue
+        fqdn = appsvc.container_hostname(con, app.get("values") or {})
+        if fqdn and integrations.export_cert(fqdn):
+            dockerctl.restart(app["slug"])
+
+
 def _domain_watchdog():
     """Prueft regelmaessig, ob die Verwaltungs-Domain noch aufloest. Faellt der
     DNS-Eintrag weg, bleibt das Panel automatisch ueber die IP erreichbar (Caddy
@@ -1675,6 +1688,10 @@ def _domain_watchdog():
     misses = 0
     while True:
         time.sleep(WATCHDOG_INTERVAL)
+        try:
+            _refresh_service_certs()
+        except Exception:  # noqa: BLE001
+            pass
         try:
             domain = store.get_setting("manage_domain", "")
             access = store.get_setting("manage_access", "both")
