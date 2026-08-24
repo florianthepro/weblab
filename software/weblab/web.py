@@ -660,6 +660,18 @@ class Handler(BaseHTTPRequestHandler):
 <div class="apps">{tiles}</div>"""
         self._render("Apps", body, "/apps")
 
+    def _suggested_domain(self, group_id):
+        """Domain nur vorschlagen, wenn die Verwaltungs-Domain wirklich als DNS-Zone
+        verbunden ist — sonst leer lassen (kein Vorschlag auf eine Domain, die nicht
+        hierher zeigt / keine Route ausloest)."""
+        manage = store.get_setting("manage_domain", "")
+        if not manage:
+            return ""
+        names = {z["name"] for z in integrations.all_zones(store.cf_accounts())}
+        if any(manage == z or manage.endswith("." + z) for z in names):
+            return f"{group_id}.{manage}"
+        return ""
+
     def _domain_field(self, current="", placeholder=""):
         """Domain: mit DNS-Konto Domain auswählen, Subdomain optional. Sonst Freitext."""
         zones = integrations.all_zones(store.cf_accounts())
@@ -772,8 +784,7 @@ class Handler(BaseHTTPRequestHandler):
  <div class="card"><h3>Basis</h3>
   <div class="field"><label for="name">Name</label>
    <input id="name" name="name" value="{ui.esc(group['name'])}" required></div>
-  {self._domain_field(
-       f"{group_id}.{store.get_setting('manage_domain','')}" if store.get_setting('manage_domain','') else '',
+  {self._domain_field(self._suggested_domain(group_id),
        f"{group_id}.{store.get_setting('manage_domain', 'example.com')}")}
   {manage_field}
   {self._exposure_field(exposure_default)}

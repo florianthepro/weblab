@@ -86,8 +86,28 @@ def init():
     with connect() as conn:
         conn.executescript(SCHEMA)
         _migrate(conn)
+        _backfill_app_domains(conn)
         if not _get(conn, "session_secret"):
             _set(conn, "session_secret", secrets.token_hex(32))
+
+
+def _backfill_app_domains(conn):
+    """Alt-Installationen: die getrennte Nextcloud-Trusted-Domain gibt es nicht mehr —
+    ihren Wert in die App-Domain uebernehmen, damit bestehende Apps erreichbar bleiben."""
+    try:
+        rows = conn.execute("SELECT id, group_id, domain, values_json FROM apps").fetchall()
+    except sqlite3.OperationalError:
+        return
+    for row in rows:
+        if (row["group_id"] or "") != "nextcloud" or (row["domain"] or "").strip():
+            continue
+        try:
+            vals = json.loads(row["values_json"] or "{}")
+        except (ValueError, TypeError):
+            vals = {}
+        trusted = (vals.get("trusted_domain") or "").strip().split()
+        if trusted:
+            conn.execute("UPDATE apps SET domain=? WHERE id=?", (trusted[0], row["id"]))
 
 
 # ---------- settings ----------

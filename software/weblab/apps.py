@@ -170,7 +170,8 @@ def dns_plan(app, connector, values, server_ip):
         except (KeyError, IndexError, ValueError):
             continue
     # Web-Apps: ein A-Record auf die eigene Domain.
-    if connector.get("http") and app.get("domain") and server_ip:
+    if (connector.get("http") and app.get("domain") and server_ip
+            and app.get("exposure") == "external"):
         plan.append({"type": "A", "name": app["domain"], "content": server_ip,
                      "priority": None, "comment": f"weblab: {app['name']}", "proxied": False})
     # Verwaltungs-Subdomain (Dashboard/Dateimanager der App) auf den Server zeigen.
@@ -191,12 +192,12 @@ def apply_dns(app, connector, values):
     if not plan:
         return [], None
     zones = integrations.all_zones(accounts)
-    done, problems = [], []
+    done, problems, zone_cache = [], [], {}
     for record in plan:
         match = _zone_match(zones, record["name"])
         if not match:
             # Zonen-Liste war leer/dünn -> Domain direkt bei Cloudflare auflösen und anlegen.
-            match = integrations.resolve_zone(accounts, record["name"])
+            match = integrations.resolve_zone(accounts, record["name"], zone_cache)
         if not match:
             problems.append(f"{record['name']}: keine passende Domain im Konto")
             continue
@@ -240,8 +241,9 @@ def sync_proxy():
             fqdn = container_hostname(connector, app.get("values") or {})
             if fqdn:
                 cert_hosts.append(fqdn)
-        if not connector.get("http") or not app.get("domain"):
-            continue
+        if (not connector.get("http") or not app.get("domain")
+                or app.get("exposure") != "external"):
+            continue        # nur öffentlich erreichbare Apps bekommen eine öffentliche Route
         routes.append({"domain": app["domain"], "port": app["host_port"], "name": app["name"]})
     access = store.get_setting("manage_access", "both")
     domain_ok = store.get_setting("domain_ok", "1") != "0"
@@ -289,7 +291,8 @@ def _run_app_container(app, connector):
     volumes = ([(data_dir, connector.get("data", {}).get("container_path", "/data"))]
                if connector.get("data") else [])
     env = env_for(connector, app["values"], app.get("domain", ""),
-                  store.get_setting("server_ip", ""), app.get("manage_host", ""))
+                  store.get_setting("server_ip", "") or sysinfo.public_ip(),
+                  app.get("manage_host", ""))
     env.update(app.get("import_env") or {})     # z. B. LEVEL fuer eine uebernommene Welt
     ports = port_binding(app["exposure"], app["host_port"], app["container_port"],
                          connector.get("protocol", "tcp"), connector)
