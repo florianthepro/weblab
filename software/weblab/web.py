@@ -17,6 +17,7 @@ import catalog
 import dockerctl
 import files
 import integrations
+import perms
 import store
 import transfer
 import sysinfo
@@ -232,6 +233,41 @@ class Handler(BaseHTTPRequestHandler):
             self._session = read_session(self.cookies.get(COOKIE))
         return self._session
 
+    @property
+    def user(self):
+        s = self.session
+        if not s:
+            return None
+        return {"id": s.get("uid"), "username": s.get("user"),
+                "role": s.get("role", "admin")}
+
+    def _is_admin(self):
+        return (self.user or {}).get("role") == "admin"
+
+    # Bereiche, die nur der Administrator sehen darf (Nutzer werden umgeleitet).
+    ADMIN_AREAS = ("/apps/catalog", "/apps/install", "/network", "/storage",
+                   "/users", "/transfer", "/settings", "/api/stats", "/api/setup")
+
+    def _authz(self, path):
+        """Zugriffskontrolle fuer eingeschraenkte Nutzer. True = abgewiesen (Antwort schon gesendet).
+        Isolation: ein Nutzer erreicht nur seine eigenen Apps, keine Admin-Bereiche,
+        und Uebertragen bleibt dem Admin vorbehalten."""
+        if self._is_admin():
+            return False
+        if path == "/" or path.startswith(self.ADMIN_AREAS):
+            self._redirect("/apps")
+            return True
+        if re.match(r"/apps/\d+/share", path):        # Uebertragen ist nur Admin-Sache
+            self._redirect("/apps", ("err", "Nur der Administrator kann Apps uebertragen."))
+            return True
+        m = re.match(r"/apps/(\d+)(?:/|$)", path)
+        if m:
+            app = store.get_app(int(m.group(1)))
+            if not app or app.get("owner_id") != self.user["id"]:
+                self._redirect("/apps", ("err", "Kein Zugriff auf diese App."))
+                return True
+        return False
+
     def _form(self):
         length = int(self.headers.get("Content-Length") or 0)
         raw = self.rfile.read(length).decode("utf-8", "replace") if length else ""
@@ -246,7 +282,8 @@ class Handler(BaseHTTPRequestHandler):
     def _render(self, title, body, active="/", head=""):
         user = (self.session or {}).get("user")
         page = ui.page(title, body, active=active, user=user, flash=self._take_flash(), head=head,
-                       banner=ui.banner_html(store.get_setting("banner", ""), self.csrf))
+                       banner=ui.banner_html(store.get_setting("banner", ""), self.csrf),
+                       is_admin=self._is_admin())
         self._send(page, headers={"Set-Cookie": "weblab_flash=; Path=/; Max-Age=0"})
 
     def _require_auth(self):
@@ -298,6 +335,8 @@ class Handler(BaseHTTPRequestHandler):
 
         if not self._require_auth():
             return None
+        if self._authz(path):
+            return None
 
         if path == "/":
             host = (self.headers.get("Host") or "").split(":")[0].lower()
@@ -329,6 +368,9 @@ class Handler(BaseHTTPRequestHandler):
         match = re.fullmatch(r"/apps/(\d+)/edit", path)
         if match:
             return self.page_app_edit(int(match.group(1)))
+        match = re.fullmatch(r"/apps/(\d+)/share", path)
+        if match:
+            return self.page_share(int(match.group(1)))
         if path == "/network":
             return self.page_network()
         if path == "/storage":
@@ -348,6 +390,8 @@ class Handler(BaseHTTPRequestHandler):
             match = re.fullmatch(r"/apps/(\d+)/files", path)
             if not match or not self._require_auth():
                 return self._redirect("/apps")
+            if self._authz(path):
+                return None
             return self.do_upload(int(match.group(1)), content_type)
         form = self._form()
 
@@ -361,6 +405,8 @@ class Handler(BaseHTTPRequestHandler):
         if not self._check_csrf(form):
             return self._redirect(self.headers.get("Referer", "/"),
                                   ("err", "Sicherheits-Token ungültig — bitte erneut versuchen."))
+        if self._authz(path):
+            return None
 
         if path == "/apps/install":
             return self.do_install(form)
@@ -369,6 +415,9 @@ class Handler(BaseHTTPRequestHandler):
         match = re.fullmatch(r"/apps/(\d+)/edit", path)
         if match:
             return self.do_app_edit(int(match.group(1)), form)
+        match = re.fullmatch(r"/apps/(\d+)/share", path)
+        if match:
+            return self.do_share(int(match.group(1)), form)
         match = re.fullmatch(r"/apps/(\d+)/action", path)
         if match:
             return self.do_app_action(int(match.group(1)), form)
@@ -488,6 +537,7 @@ class Handler(BaseHTTPRequestHandler):
             time.sleep(1)
             return self._redirect("/login", ("err", "Benutzer oder Passwort falsch."))
         payload = {"user": user["username"], "uid": user["id"],
+                   "role": user.get("role", "admin"),
                    "sid": secrets.token_hex(8), "exp": time.time() + SESSION_MAX_AGE}
         # SameSite=Lax (nicht Strict): das Sitzungs-Cookie wird auch bei der
         # HTTP->HTTPS-Umschaltung mitgeschickt (kein erneuter Login noetig). CSRF ist
@@ -606,7 +656,8 @@ class Handler(BaseHTTPRequestHandler):
         return self._redirect(f"/apps/{app['id']}", ("ok", note))
 
     def page_apps(self):
-        installed = store.list_apps()
+        installed = (store.list_apps() if self._is_admin()
+                     else store.apps_for_owner(self.user["id"]))
         news = connector_news()
         latest = {g["group"]: g["latest"] for g in catalog.groups()}
         rows = ""
@@ -854,16 +905,26 @@ class Handler(BaseHTTPRequestHandler):
         usage = dockerctl.stats().get(app["slug"], {}) if dockerctl.available() else {}
         url = f"https://{app['domain']}" if app["domain"] and connector and connector.get("http") \
             else f"{store.get_setting('server_ip', '')}:{app['host_port']}"
+        del_btn = (f'<button class="btn danger" name="action" value="delete" '
+                   f'onclick="return confirm(\'App „{ui.esc(app["name"])}“ wirklich entfernen?\')">Entfernen</button>'
+                   f'<label class="check" style="margin-left:6px"><input type="checkbox" name="delete_data" value="1">'
+                   f'<span class="help" style="margin:0">Daten mitlöschen</span></label>') \
+                  if self._is_admin() else ""
         actions = f"""<form method="post" action="/apps/{app['id']}/action" class="row">
 {ui.csrf_input(self.csrf)}
 <button class="btn" name="action" value="start">Starten</button>
 <button class="btn" name="action" value="restart">Neu starten</button>
 <button class="btn" name="action" value="stop">Stoppen</button>
-<button class="btn danger" name="action" value="delete"
- onclick="return confirm('App „{ui.esc(app['name'])}“ wirklich entfernen?')">Entfernen</button>
-<label class="check" style="margin-left:6px"><input type="checkbox" name="delete_data" value="1">
-<span class="help" style="margin:0">Daten mitlöschen</span></label>
+{del_btn}
 </form>"""
+        transfer_html = ""
+        if self._is_admin():
+            owner = store.get_user(app.get("owner_id")) if app.get("owner_id") else None
+            owner_txt = (f"Übertragen an <b>{ui.esc(owner['username'])}</b>" if owner
+                         else "Noch nicht übertragen")
+            transfer_html = (f"<div class='card' style='margin-top:13px'><div class='between'>"
+                             f"<div><b>Nutzer-Zugang</b><p class='help' style='margin:0'>{owner_txt}</p></div>"
+                             f"<a class='btn' href='/apps/{app['id']}/share'>Übertragen …</a></div></div>")
         secrets_html = ""
         if connector:
             rows = ""
@@ -899,6 +960,7 @@ class Handler(BaseHTTPRequestHandler):
 </dl></div>
 {secrets_html}
 <div class="card" style="margin-top:13px">{actions}</div>
+{transfer_html}
 {ui.section("Details", f'''<dl class="kv">
 <dt>Port</dt><dd class="mono">{ui.esc(app['host_port'])} → {ui.esc(app['container_port'])}</dd>
 <dt>Ablageort</dt><dd>{ui.esc(LOCATION_LABELS.get(app['location'], app['location']))}</dd>
@@ -1056,10 +1118,120 @@ class Handler(BaseHTTPRequestHandler):
 <div class="card" style="margin-top:14px"><h3>Installierte {ui.esc(config.get('label', 'Plugins'))}</h3>
 <div class="tbl-wrap"><table><tr><th>Datei</th><th>Größe</th><th></th></tr>{inst_rows}</table></div></div>"""
 
+    def page_share(self, app_id):
+        app, connector = self._app_and_connector(app_id)
+        if not app:
+            return self._redirect("/apps", ("err", "App nicht gefunden."))
+        users = [u for u in store.list_users() if u["role"] != "admin"]
+        deleg = (connector or {}).get("delegate") or {}
+        dfields, dactions = set(deleg.get("fields") or []), set(deleg.get("actions") or [])
+        cur = app.get("perms") or {}
+        cur_owner = app.get("owner_id")
+        grant = set(cur.get("grant") or []); revoke = set(cur.get("revoke") or [])
+        def field_checked(k):
+            base = k in dfields
+            return (base or f"field:{k}" in grant) and f"field:{k}" not in revoke
+        def act_checked(a):
+            base = a in dactions or a in perms.BASELINE_ACTIONS
+            return (base or f"action:{a}" in grant) and f"action:{a}" not in revoke
+        if not users:
+            body = ("<h1>Übertragen</h1><div class='card'><p class='sub'>Noch kein Nutzer "
+                    "vorhanden. Lege zuerst unter <a href='/users'>Nutzer</a> einen an.</p></div>")
+            return self._render("Übertragen", body, "/apps")
+        opts = "<option value=''>— Administrator (nicht übertragen) —</option>" + "".join(
+            f"<option value='{u['id']}'{' selected' if u['id']==cur_owner else ''}>{ui.esc(u['username'])}</option>"
+            for u in users)
+        field_rows = "".join(
+            f"<label class='check'><input type='checkbox' name='field_{ui.esc(f['key'])}' value='1'"
+            f"{' checked' if field_checked(f['key']) else ''}> <span>{ui.esc(f.get('label', f['key']))}</span></label>"
+            for f in connector["fields"].get("specific", []) + connector["fields"].get("required", [])
+            if not f.get("auto"))
+        act_rows = "".join(
+            f"<label class='check'><input type='checkbox' name='act_{a}' value='1'"
+            f"{' checked' if act_checked(a) else ''}> <span>{lbl}</span></label>"
+            for a, lbl in (("plugins", "Mods/Plugins verwalten"), ("files", "Dateien der App"),
+                           ("resources", "RAM/CPU anpassen (bis Limit)")))
+        body = f"""<a href="/apps/{app_id}" class="muted">← Zurück</a>
+<h1>„{ui.esc(app['name'])}" übertragen</h1>
+<form method="post" action="/apps/{app_id}/share"><div class="card">{ui.csrf_input(self.csrf)}
+<div class="field"><label>An Nutzer</label><select name="owner_id">{opts}</select></div>
+<div class="field"><label>Zugang</label><select name="mode">
+ <option value="login">Eigener Login (Nutzer verwaltet selbst)</option>
+ <option value="handover">Nur Übergabe (du verwaltest, Nutzer bekommt Zugangsdaten)</option></select></div>
+<div class="row"><div class="field" style="flex:1"><label>RAM-Limit (MB)</label>
+ <input name="ram_max" type="number" value="{int(app['ram_mb'])}"></div>
+<div class="field" style="flex:1"><label>CPU-Limit (Kerne)</label>
+ <input name="cpu_max" type="number" step="0.1" value="{app['cpu']}"></div></div>
+<h3>Der Nutzer darf</h3><div class="checks">{act_rows}</div>
+<h3>Einstellungen, die der Nutzer ändern darf</h3><div class="checks">{field_rows or "<p class='help'>Keine.</p>"}</div>
+<button class="btn primary" type="submit">Übertragen</button></div></form>"""
+        return self._render("Übertragen", body, "/apps")
+
+    def do_share(self, app_id, form):
+        app, connector = self._app_and_connector(app_id)
+        if not app:
+            return self._redirect("/apps", ("err", "App nicht gefunden."))
+        owner = (form.get("owner_id") or "").strip()
+        if not owner:
+            store.set_app_owner(app_id, None, {})
+            return self._redirect(f"/apps/{app_id}", ("ok", "Wieder beim Administrator."))
+        deleg = (connector or {}).get("delegate") or {}
+        dfields, dactions = set(deleg.get("fields") or []), set(deleg.get("actions") or [])
+        grant, revoke = [], []
+        for f in connector["fields"].get("specific", []) + connector["fields"].get("required", []):
+            if f.get("auto"):
+                continue
+            k = f["key"]; checked = form.get(f"field_{k}") == "1"
+            if checked and k not in dfields:
+                grant.append(f"field:{k}")
+            elif not checked and k in dfields:
+                revoke.append(f"field:{k}")
+        for a in ("plugins", "files", "resources"):
+            checked = form.get(f"act_{a}") == "1"
+            base = a in dactions or a in perms.BASELINE_ACTIONS
+            if checked and not base:
+                grant.append(f"action:{a}")
+            elif not checked and base:
+                revoke.append(f"action:{a}")
+        caps = {}
+        if str(form.get("ram_max") or "").strip():
+            caps["ram_mb"] = int(float(form["ram_max"]))
+        if str(form.get("cpu_max") or "").strip():
+            caps["cpu"] = float(form["cpu_max"])
+        p = {"mode": form.get("mode", "login"), "caps": caps, "grant": grant, "revoke": revoke}
+        try:
+            store.set_app_owner(app_id, int(owner), p)
+        except (ValueError, TypeError):
+            return self._redirect(f"/apps/{app_id}", ("err", "Ungültiger Nutzer."))
+        return self._redirect(f"/apps/{app_id}", ("ok", "App übertragen."))
+
     def do_app_edit(self, app_id, form):
         section = form.get("section", "basic")
+        allow_keys = None
+        if not self._is_admin():
+            app, connector = self._app_and_connector(app_id)
+            eff = perms.effective(self.user, app, connector) if app else None
+            if not eff:
+                return self._redirect("/apps", ("err", "Kein Zugriff."))
+            if section == "advanced":
+                return self._redirect(f"/apps/{app_id}", ("err", "Dafuer fehlt die Berechtigung."))
+            if section == "basic":
+                # Nutzer darf hier nur Ressourcen anpassen (bis zum Limit).
+                if not perms.can_action(eff, "resources"):
+                    return self._redirect(f"/apps/{app_id}", ("err", "Dafuer fehlt die Berechtigung."))
+                clean = {"section": "basic", "csrf": form.get("csrf", "")}
+                if form.get("ram_mb"):
+                    clean["ram_mb"] = str(int(perms.cap_value(
+                        eff, "ram_mb", int(float(form["ram_mb"])), int(app["ram_mb"]))))
+                if form.get("cpu"):
+                    clean["cpu"] = str(perms.cap_value(
+                        eff, "cpu", float(form["cpu"]), float(app["cpu"])))
+                form = clean
+            else:   # specific: nur erlaubte Felder
+                allow_keys = {f["key"] for f in connector["fields"].get("specific", [])
+                              if perms.can_field(eff, f["key"])}
         try:
-            appsvc.update(app_id, form, section)
+            appsvc.update(app_id, form, section, allow_keys=allow_keys)
         except Exception as exc:  # noqa: BLE001
             return self._redirect(f"/apps/{app_id}/edit?section={section}",
                                   ("err", f"Speichern fehlgeschlagen: {exc}"))
@@ -1068,9 +1240,12 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_app_action(self, app_id, form):
         action = form.get("action", "")
-        app = store.get_app(app_id)
+        app, connector = self._app_and_connector(app_id)
         if not app:
             return self._redirect("/apps", ("err", "App nicht gefunden."))
+        act_key = "delete" if action == "delete" else action
+        if not perms.can_action(perms.effective(self.user, app, connector), act_key):
+            return self._redirect(f"/apps/{app_id}", ("err", "Dafuer fehlt die Berechtigung."))
         try:
             if action == "start":
                 dockerctl.start(app["slug"])
@@ -1089,6 +1264,8 @@ class Handler(BaseHTTPRequestHandler):
         app, connector = self._app_and_connector(app_id)
         if not app or not connector:
             return self._redirect("/apps", ("err", "App nicht gefunden."))
+        if not perms.can_action(perms.effective(self.user, app, connector), "plugins"):
+            return self._redirect(f"/apps/{app_id}", ("err", "Dafuer fehlt die Berechtigung."))
         target = f"/apps/{app_id}/edit?section=advanced"
         try:
             if form.get("action") == "add":
@@ -1519,6 +1696,9 @@ ProtonVPN. Privaten Schlüssel und Adresse aus der heruntergeladenen WireGuard-K
 <div class="field"><label for="nu">Benutzername</label><input id="nu" name="username" required></div>
 <div class="field"><label for="np">Passwort</label>
  <input id="np" name="password" type="password" required minlength="10"></div>
+<div class="field"><label for="nr">Rolle</label><select id="nr" name="role">
+ <option value="user">Nutzer (eingeschränkt — nur eigene, übertragene Apps)</option>
+ <option value="admin">Administrator (voller Zugriff)</option></select></div>
 <button class="btn primary" type="submit">Anlegen</button></form></div>
 <div class="card"><h3>Eigenes Passwort ändern</h3>
 <form method="post" action="/users">{ui.csrf_input(self.csrf)}
@@ -1535,7 +1715,8 @@ ProtonVPN. Privaten Schlüssel und Adresse aus der heruntergeladenen WireGuard-K
                 password = form.get("password") or ""
                 if len(password) < 10:
                     return self._redirect("/users", ("err", "Passwort zu kurz (min. 10 Zeichen)."))
-                store.create_user((form.get("username") or "").strip(), password)
+                role = form.get("role") if form.get("role") in ("admin", "user") else "user"
+                store.create_user((form.get("username") or "").strip(), password, role=role)
                 return self._redirect("/users", ("ok", "Benutzer angelegt."))
             if action == "password":
                 password = form.get("password") or ""
@@ -1695,9 +1876,11 @@ ProtonVPN. Privaten Schlüssel und Adresse aus der heruntergeladenen WireGuard-K
                           {"Content-Disposition": f'attachment; filename="{name}"'})
 
     def do_files(self, app_id, form):
-        app, _ = self._app_and_connector(app_id)
+        app, connector = self._app_and_connector(app_id)
         if not app:
             return self._redirect("/apps", ("err", "App nicht gefunden."))
+        if not perms.can_action(perms.effective(self.user, app, connector), "files"):
+            return self._redirect(f"/apps/{app_id}", ("err", "Dafuer fehlt die Berechtigung."))
         base = self._app_base(app)
         action = form.get("action", "")
         current = form.get("path", "")
@@ -1729,9 +1912,11 @@ ProtonVPN. Privaten Schlüssel und Adresse aus der heruntergeladenen WireGuard-K
         return self._redirect(target)
 
     def do_upload(self, app_id, content_type):
-        app, _ = self._app_and_connector(app_id)
+        app, connector = self._app_and_connector(app_id)
         if not app:
             return self._redirect("/apps", ("err", "App nicht gefunden."))
+        if not perms.can_action(perms.effective(self.user, app, connector), "files"):
+            return self._redirect(f"/apps/{app_id}", ("err", "Dafuer fehlt die Berechtigung."))
         length = int(self.headers.get("Content-Length") or 0)
         if length > files.MAX_UPLOAD_BYTES + 8192:
             return self._redirect(f"/apps/{app_id}/files", ("err", "Datei zu groß (max. 200 MB)."))

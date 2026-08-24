@@ -194,5 +194,23 @@
     ],
     "properties": "server.properties",
     "level_env": "LEVEL"
+  },
+  "delegate": {
+    "fields": [
+      "max_players",
+      "motd",
+      "gamemode",
+      "difficulty",
+      "pvp",
+      "view_distance",
+      "whitelist"
+    ],
+    "actions": [
+      "plugins"
+    ],
+    "caps": [
+      "ram_mb",
+      "cpu"
+    ]
   }
 }

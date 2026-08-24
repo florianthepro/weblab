@@ -65,13 +65,17 @@ CREATE TABLE IF NOT EXISTS apps (
   ram_mb         INTEGER NOT NULL DEFAULT 1024,
   manage_host    TEXT NOT NULL DEFAULT '',
   values_json    TEXT NOT NULL DEFAULT '{}',
+  owner_id       INTEGER,
+  perms_json     TEXT NOT NULL DEFAULT '{}',
   created_at     INTEGER NOT NULL
 );
 """
 
 # Nachträglich ergänzte Spalten (Migration bestehender Datenbanken).
 _MIGRATIONS = {"apps": {"manage_host": "TEXT NOT NULL DEFAULT ''",
-                        "egress_id": "TEXT NOT NULL DEFAULT ''"}}
+                        "egress_id": "TEXT NOT NULL DEFAULT ''",
+                        "owner_id": "INTEGER",
+                        "perms_json": "TEXT NOT NULL DEFAULT '{}'"}}
 
 
 def _migrate(conn):
@@ -174,6 +178,24 @@ def verify_user(username, password):
     return None
 
 
+def get_user(uid):
+    with connect() as conn:
+        row = conn.execute("SELECT id,username,role,created_at FROM users WHERE id=?", (uid,)).fetchone()
+        return dict(row) if row else None
+
+
+def apps_for_owner(owner_id):
+    with connect() as conn:
+        return [_row_to_app(r) for r in conn.execute(
+            "SELECT * FROM apps WHERE owner_id=? ORDER BY name", (owner_id,))]
+
+
+def set_app_owner(app_id, owner_id, perms):
+    with connect() as conn:
+        conn.execute("UPDATE apps SET owner_id=?, perms_json=? WHERE id=?",
+                     (owner_id, json.dumps(perms or {}), app_id))
+
+
 def list_users():
     with connect() as conn:
         return [dict(r) for r in conn.execute(
@@ -199,7 +221,8 @@ def delete_user(user_id):
 # ---------- apps ----------
 APP_COLUMNS = (
     "slug name connector_id group_id version domain exposure allow_cidr host_port "
-    "container_port location network data_path cpu ram_mb manage_host egress_id values_json"
+    "container_port location network data_path cpu ram_mb manage_host egress_id values_json "
+    "owner_id perms_json"
 ).split()
 
 
@@ -228,6 +251,10 @@ def _row_to_app(row):
         app["values"] = json.loads(app.get("values_json") or "{}")
     except json.JSONDecodeError:
         app["values"] = {}
+    try:
+        app["perms"] = json.loads(app.get("perms_json") or "{}")
+    except json.JSONDecodeError:
+        app["perms"] = {}
     return app
 
 

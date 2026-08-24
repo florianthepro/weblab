@@ -513,7 +513,7 @@ def _wait_for_file(slug, path, attempts=60, delay=2):
     return False
 
 
-def update(app_id, form, section="basic"):
+def update(app_id, form, section="basic", allow_keys=None):
     """Bestehende App bearbeiten (basic = Container neu erstellen, specific = Dateien)."""
     app = store.get_app(app_id)
     if not app:
@@ -555,6 +555,8 @@ def update(app_id, form, section="basic"):
             else catalog.all_fields(connector)
         for field in fields:
             key = field["key"]
+            if allow_keys is not None and key not in allow_keys:
+                continue          # eingeschraenkter Nutzer: nur erlaubte Felder anfassen
             if key in form or field.get("type") == "bool":
                 values[key] = coerce(field, form.get(key))
         changes["values_json"] = _dumps(values)

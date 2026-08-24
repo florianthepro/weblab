@@ -289,11 +289,12 @@ def section(title, inner, open_=False, note=""):
             f'<summary>{esc(title)}{tag}</summary><div class="in">{inner}</div></details>')
 
 
-def page(title, body, active="/", user=None, flash=None, head="", banner=""):
+def page(title, body, active="/", user=None, flash=None, head="", banner="", is_admin=True):
+    tabs = TABS if is_admin else [t for t in TABS if t[0] == "/apps"]
     nav = "".join(
         f'<a class="{"on" if path == active else ""}" href="{path}">'
         f'<span class="ic">{icon}</span>{esc(label)}</a>'
-        for path, label, icon in TABS)
+        for path, label, icon in tabs)
     msg = ""
     if flash:
         kind, text = flash

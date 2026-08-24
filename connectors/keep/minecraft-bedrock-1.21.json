@@ -153,5 +153,19 @@
       "online-mode": "online_mode",
       "allow-cheats": "allow_cheats"
     }
+  },
+  "delegate": {
+    "fields": [
+      "max_players",
+      "server_name",
+      "gamemode",
+      "difficulty",
+      "allow_cheats"
+    ],
+    "actions": [],
+    "caps": [
+      "ram_mb",
+      "cpu"
+    ]
   }
 }
