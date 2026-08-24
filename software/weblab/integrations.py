@@ -3,6 +3,7 @@ import base64
 import hashlib
 import json
 import os
+import socket
 import subprocess
 import time
 import urllib.error
@@ -37,36 +38,50 @@ def http_json(url, method="GET", headers=None, data=None, timeout=25):
         return {"success": False, "errors": [{"message": str(exc)}]}
 
 
-def render_caddyfile(manage_domain, app_routes, email=None, panel_hosts=None):
+def render_caddyfile(manage_domain, app_routes, email=None, panel_hosts=None,
+                     access="both", domain_ok=True):
     """app_routes: [{'domain':..., 'port':...}] — nur Apps mit Domain und http=true.
-    panel_hosts: zusätzliche Hostnamen (App-Verwaltungs-Subdomains), die auf das Panel zeigen."""
+    panel_hosts: zusätzliche Hostnamen (App-Verwaltungs-Subdomains), die auf das Panel zeigen.
+    access: 'both' | 'domain' | 'ip' — worüber die Verwaltung erreichbar ist.
+    domain_ok: zeigt der DNS-Eintrag noch hierher? Wenn nicht, bleibt das Panel
+               immer über die IP erreichbar (kein Aussperren)."""
     email = email or (f"admin@{manage_domain}" if manage_domain else "")
     panel_hosts = [h for h in (panel_hosts or []) if h]
+    # Panel auf der Domain nur, wenn gewünscht UND die Domain erreichbar ist.
+    domain_serves = bool(manage_domain) and access in ("domain", "both") and domain_ok
+    # Die IP bedient das Panel immer — außer im reinen Domain-Betrieb mit intakter Domain.
+    ip_serves_panel = not (access == "domain" and domain_serves)
+    app_domains = [r["domain"] for r in app_routes if r.get("domain")]
+    panel_domain_hosts = ([manage_domain] + panel_hosts) if domain_serves else []
+
     out = ["{"]
     if email:
         out.append(f"\temail {email}")
     out.append("\tadmin 127.0.0.1:2019")
     out.append("}")
     out.append("")
-    out.append("# Zugriff über die IP (vor/ohne Domain) und HTTP->HTTPS-Umleitung")
+    out.append("# HTTP-Ebene: IP-Zugriff und HTTP->HTTPS-Umleitung benannter Hosts")
     out.append("http:// {")
-    if manage_domain:
-        hosts = " ".join([manage_domain] + panel_hosts
-                         + [r["domain"] for r in app_routes if r.get("domain")])
-        out.append(f"\t@named host {hosts}")
+    named = panel_domain_hosts + app_domains
+    if named:
+        out.append(f"\t@named host {' '.join(named)}")
         out.append("\thandle @named {")
         out.append("\t\tredir https://{host}{uri} permanent")
         out.append("\t}")
     out.append("\thandle {")
-    out.append(f"\t\treverse_proxy 127.0.0.1:{PANEL_PORT}")
+    if ip_serves_panel:
+        out.append(f"\t\treverse_proxy 127.0.0.1:{PANEL_PORT}")
+    else:
+        # Nur-Domain-Betrieb: IP-Aufruf zur Domain umleiten.
+        out.append(f"\t\tredir https://{manage_domain}{{uri}} permanent")
     out.append("\t}")
     out.append("}")
-    if manage_domain:
+    if domain_serves:
         out += ["", "# Verwaltungsoberfläche", f"{manage_domain} {{",
                 "\tencode gzip zstd", f"\treverse_proxy 127.0.0.1:{PANEL_PORT}", "}"]
-    for host in panel_hosts:
-        out += ["", f"# App-Verwaltung: {host}", f"{host} {{",
-                "\tencode gzip zstd", f"\treverse_proxy 127.0.0.1:{PANEL_PORT}", "}"]
+        for host in panel_hosts:
+            out += ["", f"# App-Verwaltung: {host}", f"{host} {{",
+                    "\tencode gzip zstd", f"\treverse_proxy 127.0.0.1:{PANEL_PORT}", "}"]
     for route in app_routes:
         if not route.get("domain"):
             continue
@@ -75,8 +90,21 @@ def render_caddyfile(manage_domain, app_routes, email=None, panel_hosts=None):
     return "\n".join(out) + "\n"
 
 
-def write_caddy(manage_domain, app_routes, email=None, panel_hosts=None):
-    content = render_caddyfile(manage_domain, app_routes, email, panel_hosts)
+def domain_up(domain):
+    """True, wenn die Domain noch einen DNS-Eintrag hat. Ein entfernter Eintrag
+    (NXDOMAIN / keine Adresse) gilt als 'unten' — das Panel bleibt dann über die
+    IP erreichbar, damit man sich nicht aussperrt."""
+    if not domain:
+        return True
+    try:
+        return bool(socket.getaddrinfo(domain, None))
+    except (socket.gaierror, OSError):
+        return False
+
+
+def write_caddy(manage_domain, app_routes, email=None, panel_hosts=None,
+                access="both", domain_ok=True):
+    content = render_caddyfile(manage_domain, app_routes, email, panel_hosts, access, domain_ok)
     tmp = CADDYFILE + ".tmp"
     os.makedirs(os.path.dirname(CADDYFILE), exist_ok=True)
     with open(tmp, "w", encoding="utf-8") as fh:
@@ -235,10 +263,11 @@ def plugin_download_url(source, project_id, loader=None, game_versions=None):
     return None, None
 
 
-def write_caddyfile_safe(manage_domain, app_routes, email=None, panel_hosts=None):
+def write_caddyfile_safe(manage_domain, app_routes, email=None, panel_hosts=None,
+                         access="both", domain_ok=True):
     """Wie write_caddy, wirft aber nicht."""
     try:
-        write_caddy(manage_domain, app_routes, email, panel_hosts)
+        write_caddy(manage_domain, app_routes, email, panel_hosts, access, domain_ok)
         return True, None
     except Exception as exc:  # noqa: BLE001 - bewusst: Proxy-Fehler nur melden
         return False, str(exc)

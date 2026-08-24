@@ -222,7 +222,10 @@ def sync_proxy():
         if not connector or not connector.get("http") or not app.get("domain"):
             continue
         routes.append({"domain": app["domain"], "port": app["host_port"], "name": app["name"]})
-    return integrations.write_caddyfile_safe(manage_domain, routes, panel_hosts=panel_hosts)
+    access = store.get_setting("manage_access", "both")
+    domain_ok = store.get_setting("domain_ok", "1") != "0"
+    return integrations.write_caddyfile_safe(manage_domain, routes, panel_hosts=panel_hosts,
+                                             access=access, domain_ok=domain_ok)
 
 
 def _ufw(*args):

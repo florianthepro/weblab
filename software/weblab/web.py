@@ -31,7 +31,7 @@ LOCATION_LABELS = {"docker": "Docker", "device": "Gerät"}
 SESSION_MAX_AGE = 12 * 3600
 
 # Fortschritt des Setup-Assistenten
-SETUP_STATE = {"running": False, "percent": 0, "step": "", "done": False, "error": None}
+SETUP_STATE = {"running": False, "percent": 0, "step": "", "done": False, "error": None, "redirect": "/login"}
 
 # Laufende Cloudflare-Anmeldung (OAuth)
 CF_LOGIN = {"state": "", "verifier": "", "client_id": "", "client_secret": "",
@@ -103,15 +103,17 @@ def csrf_for(session):
 
 
 # Setup-Ablauf (Hintergrund, damit der Fortschritt abfragbar bleibt)
-def run_setup(username, password, domain, cf_email="", cf_key=""):
+def run_setup(username, password, domain, access="both", cf_email="", cf_key=""):
     def worker():
         try:
             SETUP_STATE.update({"running": True, "percent": 5, "step": "Benutzer anlegen",
                                 "done": False, "error": None})
             if store.user_count() == 0:
                 store.create_user(username, password)
-            SETUP_STATE.update({"percent": 15, "step": "Domain speichern"})
+            SETUP_STATE.update({"percent": 15, "step": "Zugang speichern"})
             store.set_setting("manage_domain", domain)
+            store.set_setting("manage_access", access)
+            store.set_setting("domain_ok", "1")
 
             SETUP_STATE.update({"percent": 25, "step": "Server-IP ermitteln"})
             server_ip = sysinfo.public_ip()
@@ -148,7 +150,10 @@ def run_setup(username, password, domain, cf_email="", cf_key=""):
             SETUP_STATE.update({"percent": 95, "step": "Zertifikat wird ausgestellt"})
             time.sleep(3)
             store.set_setting("setup_done", "1")
-            SETUP_STATE.update({"percent": 100, "step": "Fertig", "done": True, "running": False})
+            target = (f"https://{domain}/login"
+                      if domain and access in ("domain", "both") else "/login")
+            SETUP_STATE.update({"percent": 100, "step": "Fertig", "done": True,
+                                "running": False, "redirect": target})
         except Exception as exc:  # noqa: BLE001 - Fehler dem Nutzer zeigen
             SETUP_STATE.update({"error": str(exc), "running": False, "step": "Fehler"})
 
@@ -389,9 +394,15 @@ class Handler(BaseHTTPRequestHandler):
   <input id="password" name="password" type="password" required minlength="10"
    autocomplete="new-password" autocapitalize="none" autocorrect="off" spellcheck="false">
   <p class="help">Mindestens 10 Zeichen.</p></div>
+ <div class="field"><label for="access">Verwaltung erreichbar über</label>
+  <select id="access" name="access">
+   <option value="both">Domain und IP</option>
+   <option value="domain">Nur Domain</option>
+   <option value="ip">Nur IP-Adresse</option>
+  </select></div>
  <div class="field"><label for="domain">Verwaltungs-Domain</label>
-  <input id="domain" name="domain" placeholder="example.com" required>
-  <p class="help">Der A-Record (@) dieser Domain muss auf diesen Server zeigen{f' ({ui.esc(server_ip)})' if server_ip else ''}.</p></div>
+  <input id="domain" name="domain" placeholder="example.com">
+  <p class="help">A-Record (@) muss auf diesen Server zeigen{f' ({ui.esc(server_ip)})' if server_ip else ''}. Bei „Nur IP" leer lassen.</p></div>
  <button class="btn primary" type="submit" style="width:100%">Einrichtung starten</button>
 </form></div></div>"""
         self._send(ui.bare("Einrichten", body))
@@ -402,9 +413,16 @@ class Handler(BaseHTTPRequestHandler):
         username = (form.get("username") or "").strip()
         password = form.get("password") or ""
         domain = (form.get("domain") or "").strip().lower().lstrip("@.")
-        if not username or len(password) < 10 or not domain:
-            return self._redirect("/setup", ("err", "Bitte alle Pflichtfelder korrekt ausfüllen."))
-        run_setup(username, password, domain)
+        access = form.get("access") or "both"
+        if access not in ("both", "domain", "ip"):
+            access = "both"
+        if access == "ip":
+            domain = ""
+        if not username or len(password) < 10:
+            return self._redirect("/setup", ("err", "Bitte Benutzer und Passwort (mind. 10 Zeichen) angeben."))
+        if access in ("both", "domain") and not domain:
+            return self._redirect("/setup", ("err", 'Für den Domain-Zugang bitte eine Domain angeben — oder „Nur IP" wählen.'))
+        run_setup(username, password, domain, access)
         return self._redirect("/setup/progress")
 
     def page_setup_progress(self):
@@ -426,7 +444,7 @@ class Handler(BaseHTTPRequestHandler):
    if(s.error){document.getElementById('err').innerHTML=
      '<div class="msg err">'+s.error+'</div>';return;}
    if(s.done){document.getElementById('step').textContent='Fertig — weiter zur Anmeldung.';
-     setTimeout(function(){location.href='/login'},900);return;}
+     setTimeout(function(){location.href=(s.redirect||'/login')},900);return;}
    setTimeout(tick,900);
   }).catch(function(){setTimeout(tick,1500)});
  } tick();})();
@@ -1208,6 +1226,10 @@ ProtonVPN. Privaten Schlüssel und Adresse aus der heruntergeladenen WireGuard-K
 <span class="help" style="margin:0">ohne Internet</span></label>
 <button class="btn" type="submit">Anlegen</button></form>"""
 
+        cur_access = store.get_setting("manage_access", "both")
+        access_opts = "".join(
+            f'<option value="{v}"{" selected" if v == cur_access else ""}>{lbl}</option>'
+            for v, lbl in (("both", "Domain und IP"), ("domain", "Nur Domain"), ("ip", "Nur IP-Adresse")))
         body = f"""<h1>Netzwerk</h1>
 <div class="card"><form method="post" action="/network" class="row">{ui.csrf_input(self.csrf)}
 <input type="hidden" name="action" value="general">
@@ -1215,6 +1237,8 @@ ProtonVPN. Privaten Schlüssel und Adresse aus der heruntergeladenen WireGuard-K
  <input id="manage_domain" name="manage_domain" value="{ui.esc(store.get_setting('manage_domain',''))}"></div>
 <div class="field" style="flex:1;min-width:160px;margin:0"><label for="server_ip">Server-IP</label>
  <input id="server_ip" name="server_ip" value="{ui.esc(store.get_setting('server_ip',''))}"></div>
+<div class="field" style="flex:1;min-width:150px;margin:0"><label for="manage_access">Zugang</label>
+ <select id="manage_access" name="manage_access">{access_opts}</select></div>
 <button class="btn" type="submit" style="margin-top:22px">Speichern</button></form></div>
 <h2>DNS</h2>
 <div class="card">{self._cloudflare_block()}</div>
@@ -1250,6 +1274,9 @@ ProtonVPN. Privaten Schlüssel und Adresse aus der heruntergeladenen WireGuard-K
                                   (form.get("manage_domain") or "").strip().lower().lstrip("@."))
                 store.set_setting("server_ip",
                                   (form.get("server_ip") or "").strip() or sysinfo.public_ip())
+                access = form.get("manage_access") or "both"
+                store.set_setting("manage_access", access if access in ("both", "domain", "ip") else "both")
+                store.set_setting("domain_ok", "1")     # nach Aenderung frisch pruefen
                 ok, err = appsvc.sync_proxy()
                 return self._redirect("/network", ("ok", "Gespeichert.") if ok
                                       else ("err", f"Proxy: {err}"))
@@ -1638,8 +1665,44 @@ ProtonVPN. Privaten Schlüssel und Adresse aus der heruntergeladenen WireGuard-K
         return self._redirect(target, ("ok", f"Hochgeladen: {', '.join(saved)}"))
 
 
+WATCHDOG_INTERVAL = int(os.environ.get("WEBLAB_WATCHDOG_SEC", "180"))
+
+
+def _domain_watchdog():
+    """Prueft regelmaessig, ob die Verwaltungs-Domain noch aufloest. Faellt der
+    DNS-Eintrag weg, bleibt das Panel automatisch ueber die IP erreichbar (Caddy
+    wird neu geschrieben); kommt die Domain zurueck, wird sie wieder freigeschaltet."""
+    misses = 0
+    while True:
+        time.sleep(WATCHDOG_INTERVAL)
+        try:
+            domain = store.get_setting("manage_domain", "")
+            access = store.get_setting("manage_access", "both")
+            if not domain or access == "ip":
+                continue
+            up = integrations.domain_up(domain)
+            misses = 0 if up else misses + 1
+            healthy = up or misses < 2      # erst nach 2 Fehlversuchen umschalten
+            prev = store.get_setting("domain_ok", "1") != "0"
+            if healthy != prev:
+                store.set_setting("domain_ok", "1" if healthy else "0")
+                appsvc.sync_proxy()
+                if not healthy:
+                    store.set_setting("banner",
+                        f"Die Domain {domain} ist gerade nicht erreichbar — die Verwaltung "
+                        f"laeuft vorerst ueber die IP-Adresse. Sobald der DNS-Eintrag wieder "
+                        f"auf diesen Server zeigt, schaltet sich die Domain von selbst frei.")
+                else:
+                    cur = store.get_setting("banner", "")
+                    if domain in cur and "nicht erreichbar" in cur:
+                        store.set_setting("banner", "")
+        except Exception:  # noqa: BLE001 - der Watchdog darf das Panel nie stoppen
+            pass
+
+
 def serve():
     store.init()
+    threading.Thread(target=_domain_watchdog, daemon=True).start()
     httpd = ThreadingHTTPServer((HOST, PORT), Handler)
     httpd.daemon_threads = True
     print(f"weblab läuft auf http://{HOST}:{PORT}", flush=True)
