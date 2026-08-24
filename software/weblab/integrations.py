@@ -70,9 +70,10 @@ def render_caddyfile(manage_domain, app_routes, email=None, panel_hosts=None,
     app_domains = [r["domain"] for r in app_routes if r.get("domain")]
     # Panel soll über die Domain laufen, wenn gewünscht UND die Domain hierher zeigt.
     want_domain = bool(manage_domain) and access in ("domain", "both") and domain_ok
-    # Erst wenn Caddy wirklich ein Zertifikat hat, wird auf HTTPS umgeleitet — sonst
-    # bleibt das Panel über HTTP erreichbar (Anmeldung klappt sofort, kein Aussperren).
-    https_on = want_domain and https_ready
+    # Named Domains werden immer auf HTTPS umgeleitet — Caddy holt und erneuert das
+    # Zertifikat selbst (Let's Encrypt). Kein eigenes Zertifikats-Raten mehr (das war
+    # fragil und hat den Redirect dauerhaft aus gelassen -> "nur HTTP"/self-signed).
+    https_on = want_domain
     # Reiner Domain-Betrieb leitet die IP erst auf die Domain um, wenn HTTPS wirklich steht.
     ip_serves_panel = not (access == "domain" and https_on)
     panel_domain_hosts = ([manage_domain] + panel_hosts) if https_on else []

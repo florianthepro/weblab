@@ -587,10 +587,31 @@ def update(app_id, form, section="basic", allow_keys=None):
     return app
 
 
-def remove(app_id, delete_data=False):
+def _delete_app_dns(app):
+    """DNS-Einträge dieser App (Domain + Verwaltungs-Subdomain) bei Cloudflare löschen."""
+    accounts = store.cf_accounts()
+    if not accounts:
+        return
+    for host in [h for h in (app.get("domain"), app.get("manage_host")) if h]:
+        match = integrations.resolve_zone(accounts, host)
+        if not match:
+            continue
+        cf = integrations.Cloudflare(match["token"])
+        records, _ = cf.list_records(match["name"])
+        for rec in records:
+            if rec.get("name") == host and rec.get("type") in ("A", "AAAA", "CNAME"):
+                cf.delete_record(match["name"], rec["id"])
+
+
+def remove(app_id, delete_data=False, delete_dns=False):
     app = store.get_app(app_id)
     if not app:
         return
+    if delete_dns:
+        try:
+            _delete_app_dns(app)
+        except Exception:  # noqa: BLE001 - DNS-Löschen ist best-effort
+            pass
     dockerctl.remove(app["slug"], missing_ok=True)
     vpn.egress_down(app["slug"])
     connector = catalog.get(app["connector_id"]) or {}

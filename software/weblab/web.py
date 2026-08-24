@@ -583,7 +583,7 @@ class Handler(BaseHTTPRequestHandler):
             usage = stats.get(app["slug"], {})
             state = dockerctl.status(app["slug"])
             if app["domain"]:
-                target = f"<a href='https://{ui.esc(app['domain'])}'>{ui.esc(app['domain'])}</a>"
+                target = f"<a href='https://{ui.esc(app['domain'])}' target='_blank' rel='noopener'>{ui.esc(app['domain'])} ↗</a>"
             else:
                 target = f"<span class='mono'>Port {ui.esc(app['host_port'])}</span>"
             rows += (f"<tr><td><a href='/apps/{app['id']}'><b>{ui.esc(app['name'])}</b></a></td>"
@@ -663,7 +663,7 @@ class Handler(BaseHTTPRequestHandler):
         rows = ""
         for app in installed:
             state = dockerctl.status(app["slug"])
-            link = (f"<a href='https://{ui.esc(app['domain'])}'>{ui.esc(app['domain'])}</a>"
+            link = (f"<a href='https://{ui.esc(app['domain'])}' target='_blank' rel='noopener'>{ui.esc(app['domain'])} ↗</a>"
                     if app["domain"] else f"<span class='mono'>Port {ui.esc(app['host_port'])}</span>")
             top = latest.get(app["group_id"]) or {}
             upd = (' <span class="badge">Update</span>'
@@ -905,18 +905,31 @@ class Handler(BaseHTTPRequestHandler):
         usage = dockerctl.stats().get(app["slug"], {}) if dockerctl.available() else {}
         url = f"https://{app['domain']}" if app["domain"] and connector and connector.get("http") \
             else f"{store.get_setting('server_ip', '')}:{app['host_port']}"
-        del_btn = (f'<button class="btn danger" name="action" value="delete" '
-                   f'onclick="return confirm(\'App „{ui.esc(app["name"])}“ wirklich entfernen?\')">Entfernen</button>'
-                   f'<label class="check" style="margin-left:6px"><input type="checkbox" name="delete_data" value="1">'
-                   f'<span class="help" style="margin:0">Daten mitlöschen</span></label>') \
-                  if self._is_admin() else ""
+        _href = url if url.startswith("http") else f"http://{url}"
+        app_link = f'<a href="{ui.esc(_href)}" target="_blank" rel="noopener">{ui.esc(url)} ↗</a>'
+
+        del_modal = ""
+        del_open = ""
+        if self._is_admin():
+            del_open = ('<button type="button" class="btn danger" '
+                        f"onclick=\"document.getElementById('delDlg').showModal()\">Entfernen …</button>")
+            del_modal = ui.modal("delDlg", f'„{ui.esc(app["name"])}" entfernen', f"""
+<form method="post" action="/apps/{app['id']}/action">{ui.csrf_input(self.csrf)}
+<div class="field"><label>Daten dieser App</label>
+ <label class="check"><input type="radio" name="delete_data" value="0" checked>
+  <span>Behalten (Backup / da lassen)</span></label>
+ <label class="check"><input type="radio" name="delete_data" value="1">
+  <span>Endgültig löschen</span></label></div>
+<label class="check"><input type="checkbox" name="delete_dns" value="1">
+ <span>DNS-Einträge dieser App löschen</span></label>
+<div style="margin-top:12px"><button class="btn danger" name="action" value="delete">Entfernen</button></div>
+</form>""")
         actions = f"""<form method="post" action="/apps/{app['id']}/action" class="row">
 {ui.csrf_input(self.csrf)}
 <button class="btn" name="action" value="start">Starten</button>
 <button class="btn" name="action" value="restart">Neu starten</button>
 <button class="btn" name="action" value="stop">Stoppen</button>
-{del_btn}
-</form>"""
+</form>{del_open}"""
         transfer_html = ""
         if self._is_admin():
             owner = store.get_user(app.get("owner_id")) if app.get("owner_id") else None
@@ -954,13 +967,13 @@ class Handler(BaseHTTPRequestHandler):
 {ui.stat('Netzwerk', usage.get('net', '—') or '—', None, ui.esc(app['network']))}
 </div>
 <div class="card"><dl class="kv">
-<dt>Erreichbar über</dt><dd class="mono">{ui.esc(url)}</dd>
-{f'<dt>Verwaltung</dt><dd class="mono"><a href="https://{ui.esc(app["manage_host"])}">{ui.esc(app["manage_host"])}</a></dd>' if app.get('manage_host') else ''}
+<dt>Erreichbar über</dt><dd class="mono">{app_link}</dd>
+{f'<dt>Verwaltung</dt><dd class="mono"><a href="https://{ui.esc(app["manage_host"])}" target="_blank" rel="noopener">{ui.esc(app["manage_host"])} ↗</a></dd>' if app.get('manage_host') else ''}
 <dt>Sichtbarkeit</dt><dd>{ui.esc(EXPOSURE_LABELS.get(app['exposure'], app['exposure']))}</dd>
 </dl></div>
 {secrets_html}
 <div class="card" style="margin-top:13px">{actions}</div>
-{transfer_html}
+{transfer_html}{del_modal}
 {ui.section("Details", f'''<dl class="kv">
 <dt>Port</dt><dd class="mono">{ui.esc(app['host_port'])} → {ui.esc(app['container_port'])}</dd>
 <dt>Ablageort</dt><dd>{ui.esc(LOCATION_LABELS.get(app['location'], app['location']))}</dd>
@@ -1254,7 +1267,8 @@ class Handler(BaseHTTPRequestHandler):
             elif action == "restart":
                 dockerctl.restart(app["slug"])
             elif action == "delete":
-                appsvc.remove(app_id, delete_data=form.get("delete_data") == "1")
+                appsvc.remove(app_id, delete_data=form.get("delete_data") == "1",
+                              delete_dns=form.get("delete_dns") == "1")
                 return self._redirect("/apps", ("ok", f"{app['name']} wurde entfernt."))
         except Exception as exc:  # noqa: BLE001
             return self._redirect(f"/apps/{app_id}", ("err", str(exc)))
@@ -1380,8 +1394,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def _vpn_dialog(self):
         inner = f"""<p class="help" style="margin-bottom:12px">WireGuard-Zugang von Mullvad oder
-ProtonVPN. Privaten Schlüssel und Adresse aus der heruntergeladenen WireGuard-Konfiguration
-übernehmen (der Schlüssel wird nur für diesen Ausgang gespeichert).</p>
+ProtonVPN. ProtonVPN geht auch mit dem <b>kostenlosen</b> Konto — kein Abo nötig:
+im Proton-Konto unter WireGuard eine Konfiguration erstellen und privaten Schlüssel +
+Adresse hier eintragen (der Schlüssel wird nur für diesen Ausgang gespeichert).</p>
 <form method="post" action="/network">{ui.csrf_input(self.csrf)}
 <input type="hidden" name="action" value="egress_add">
 <div class="field"><label for="e_label">Name</label>
