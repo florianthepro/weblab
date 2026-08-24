@@ -1,0 +1,23 @@
+{
+  "id": "stirling-pdf-1",
+  "group": "stirling-pdf",
+  "name": "Stirling-PDF",
+  "version": "1",
+  "category": "Werkzeuge",
+  "icon": "📄",
+  "summary": "PDFs bearbeiten: zusammenfügen, teilen, umwandeln",
+  "description": "",
+  "runtime": "docker",
+  "image": "stirlingtools/stirling-pdf:latest",
+  "container_port": 8080,
+  "protocol": "tcp",
+  "http": true,
+  "default_exposure": "external",
+  "data": {
+    "container_path": "/configs",
+    "label": "Einstellungen"
+  },
+  "env": {},
+  "fields": { "required": [], "specific": [] },
+  "advanced": {}
+}

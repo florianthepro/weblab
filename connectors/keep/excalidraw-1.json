@@ -1,0 +1,19 @@
+{
+  "id": "excalidraw-1",
+  "group": "excalidraw",
+  "name": "Excalidraw",
+  "version": "1",
+  "category": "Werkzeuge",
+  "icon": "✏️",
+  "summary": "Whiteboard zum Skizzieren im Browser",
+  "description": "",
+  "runtime": "docker",
+  "image": "excalidraw/excalidraw:latest",
+  "container_port": 80,
+  "protocol": "tcp",
+  "http": true,
+  "default_exposure": "external",
+  "env": {},
+  "fields": { "required": [], "specific": [] },
+  "advanced": {}
+}

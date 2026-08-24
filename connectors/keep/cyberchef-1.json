@@ -1,0 +1,19 @@
+{
+  "id": "cyberchef-1",
+  "group": "cyberchef",
+  "name": "CyberChef",
+  "version": "1",
+  "category": "Werkzeuge",
+  "icon": "🧪",
+  "summary": "Daten kodieren, dekodieren, umwandeln",
+  "description": "",
+  "runtime": "docker",
+  "image": "mpepping/cyberchef:latest",
+  "container_port": 8000,
+  "protocol": "tcp",
+  "http": true,
+  "default_exposure": "external",
+  "env": {},
+  "fields": { "required": [], "specific": [] },
+  "advanced": {}
+}

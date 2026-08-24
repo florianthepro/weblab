@@ -1,0 +1,23 @@
+{
+  "id": "memos-1",
+  "group": "memos",
+  "name": "Memos",
+  "version": "1",
+  "category": "Werkzeuge",
+  "icon": "📝",
+  "summary": "Schnelle Notizen, selbst gehostet",
+  "description": "",
+  "runtime": "docker",
+  "image": "neosmemo/memos:stable",
+  "container_port": 5230,
+  "protocol": "tcp",
+  "http": true,
+  "default_exposure": "external",
+  "data": {
+    "container_path": "/var/opt/memos",
+    "label": "Notizen"
+  },
+  "env": {},
+  "fields": { "required": [], "specific": [] },
+  "advanced": {}
+}

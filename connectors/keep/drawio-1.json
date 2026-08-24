@@ -1,0 +1,19 @@
+{
+  "id": "drawio-1",
+  "group": "drawio",
+  "name": "draw.io",
+  "version": "1",
+  "category": "Werkzeuge",
+  "icon": "📐",
+  "summary": "Diagramme und Flowcharts erstellen",
+  "description": "",
+  "runtime": "docker",
+  "image": "jgraph/drawio:latest",
+  "container_port": 8080,
+  "protocol": "tcp",
+  "http": true,
+  "default_exposure": "external",
+  "env": {},
+  "fields": { "required": [], "specific": [] },
+  "advanced": {}
+}

@@ -1,0 +1,137 @@
+{
+  "id": "minecraft-crossplay-1.21",
+  "group": "minecraft-crossplay",
+  "name": "Minecraft (Crossplay)",
+  "version": "1.21.5",
+  "category": "Spiele",
+  "icon": "🎮",
+  "summary": "Java + Bedrock zusammen (Geyser/Floodgate), Xbox/Switch/Handy/PC",
+  "description": "",
+  "runtime": "docker",
+  "image": "itzg/minecraft-server:java21",
+  "container_port": 25565,
+  "protocol": "tcp",
+  "http": false,
+  "default_exposure": "external",
+  "data": {
+    "container_path": "/data",
+    "label": "Weltdaten"
+  },
+  "env": {
+    "EULA": "TRUE",
+    "TYPE": "PAPER",
+    "VERSION": "1.21.5",
+    "USE_AIKAR_FLAGS": "true",
+    "MODRINTH_PROJECTS": "geyser,floodgate,viaversion",
+    "MODRINTH_DOWNLOAD_DEPENDENCIES": "required"
+  },
+  "fixed_ports": [
+    { "port": 25565, "protocol": "tcp" },
+    { "port": 19132, "protocol": "udp" }
+  ],
+  "notes": [
+    "Java verbindet auf 25565 (TCP), Bedrock (Xbox/Switch/Handy) auf 19132 (UDP).",
+    "Bedrock-Spieler nutzen einen . vor dem Namen, wenn Floodgate aktiv ist."
+  ],
+  "fields": {
+    "required": [
+      {
+        "key": "ram_gb",
+        "label": "RAM (GB)",
+        "type": "number",
+        "default": 4,
+        "min": 1,
+        "max": 64,
+        "required": true,
+        "target": { "kind": "env", "name": "MEMORY", "format": "{value}G" }
+      },
+      {
+        "key": "max_players",
+        "label": "Max. Spieler",
+        "type": "number",
+        "default": 20,
+        "min": 1,
+        "max": 500,
+        "required": true,
+        "target": {
+          "kind": "file_line",
+          "file": "/data/server.properties",
+          "prefix": "max-players="
+        }
+      }
+    ],
+    "specific": [
+      {
+        "key": "motd",
+        "label": "MOTD (Server-Beschreibung)",
+        "type": "string",
+        "default": "Ein weblab Crossplay-Server",
+        "target": {
+          "kind": "file_line",
+          "file": "/data/server.properties",
+          "prefix": "motd="
+        }
+      },
+      {
+        "key": "gamemode",
+        "label": "Spielmodus",
+        "type": "select",
+        "options": ["survival", "creative", "adventure", "spectator"],
+        "default": "survival",
+        "target": {
+          "kind": "file_line",
+          "file": "/data/server.properties",
+          "prefix": "gamemode="
+        }
+      },
+      {
+        "key": "difficulty",
+        "label": "Schwierigkeit",
+        "type": "select",
+        "options": ["peaceful", "easy", "normal", "hard"],
+        "default": "normal",
+        "target": {
+          "kind": "file_line",
+          "file": "/data/server.properties",
+          "prefix": "difficulty="
+        }
+      },
+      {
+        "key": "pvp",
+        "label": "PvP erlauben",
+        "type": "bool",
+        "default": true,
+        "target": {
+          "kind": "file_line",
+          "file": "/data/server.properties",
+          "prefix": "pvp="
+        }
+      },
+      {
+        "key": "view_distance",
+        "label": "Sichtweite (Chunks)",
+        "type": "number",
+        "default": 10,
+        "min": 3,
+        "max": 32,
+        "target": {
+          "kind": "file_line",
+          "file": "/data/server.properties",
+          "prefix": "view-distance="
+        }
+      }
+    ]
+  },
+  "advanced": {
+    "plugins": {
+      "enabled": true,
+      "label": "Plugins",
+      "path": "/data/plugins",
+      "restart_after_change": true,
+      "sources": [
+        { "id": "modrinth", "name": "Modrinth", "loader": "paper", "game_versions": ["1.21.5"] },
+        { "id": "spiget", "name": "SpigotMC" }
+      ]
+    }
+  }
+}

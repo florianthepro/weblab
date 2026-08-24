@@ -1,0 +1,85 @@
+{
+  "id": "minecraft-bedrock-1.21",
+  "group": "minecraft-bedrock",
+  "name": "Minecraft (Bedrock)",
+  "version": "1.21",
+  "category": "Spiele",
+  "icon": "🟩",
+  "summary": "Bedrock-Server für Handy, Konsole und Windows",
+  "description": "",
+  "runtime": "docker",
+  "image": "itzg/minecraft-bedrock-server",
+  "container_port": 19132,
+  "protocol": "udp",
+  "http": false,
+  "default_exposure": "external",
+  "data": {
+    "container_path": "/data",
+    "label": "Weltdaten"
+  },
+  "env": {
+    "EULA": "TRUE"
+  },
+  "fixed_ports": [
+    { "port": 19132, "protocol": "udp" }
+  ],
+  "notes": [
+    "Spieler verbinden sich auf UDP-Port 19132.",
+    "Für Xbox/Switch braucht es je nach Netzwerk zusätzlich eine App wie BedrockConnect."
+  ],
+  "fields": {
+    "required": [
+      {
+        "key": "max_players",
+        "label": "Max. Spieler",
+        "type": "number",
+        "default": 10,
+        "min": 1,
+        "max": 100,
+        "required": true,
+        "target": { "kind": "env", "name": "MAX_PLAYERS" }
+      }
+    ],
+    "specific": [
+      {
+        "key": "server_name",
+        "label": "Servername (in der Liste)",
+        "type": "string",
+        "default": "weblab Bedrock",
+        "target": { "kind": "env", "name": "SERVER_NAME" }
+      },
+      {
+        "key": "gamemode",
+        "label": "Spielmodus",
+        "type": "select",
+        "options": ["survival", "creative", "adventure"],
+        "default": "survival",
+        "target": { "kind": "env", "name": "GAMEMODE" }
+      },
+      {
+        "key": "difficulty",
+        "label": "Schwierigkeit",
+        "type": "select",
+        "options": ["peaceful", "easy", "normal", "hard"],
+        "default": "easy",
+        "target": { "kind": "env", "name": "DIFFICULTY" }
+      },
+      {
+        "key": "allow_cheats",
+        "label": "Cheats erlauben",
+        "type": "bool",
+        "default": false,
+        "target": { "kind": "env", "name": "ALLOW_CHEATS" }
+      },
+      {
+        "key": "online_mode",
+        "label": "Xbox-Live-Konto verlangen",
+        "type": "bool",
+        "default": true,
+        "help": "Aus = auch ohne Xbox-Konto beitreten (unsicher).",
+        "target": { "kind": "env", "name": "ONLINE_MODE" }
+      }
+    ]
+  },
+  "advanced": {}
+}

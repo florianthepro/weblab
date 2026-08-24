@@ -1,0 +1,25 @@
+{
+  "id": "homepage-1",
+  "group": "homepage",
+  "name": "Homepage",
+  "version": "1",
+  "category": "Werkzeuge",
+  "icon": "🏠",
+  "summary": "Startseite mit Kacheln für deine Dienste",
+  "description": "",
+  "runtime": "docker",
+  "image": "ghcr.io/gethomepage/homepage:latest",
+  "container_port": 3000,
+  "protocol": "tcp",
+  "http": true,
+  "default_exposure": "external",
+  "data": {
+    "container_path": "/app/config",
+    "label": "Konfiguration"
+  },
+  "env": {
+    "HOMEPAGE_ALLOWED_HOSTS": "*"
+  },
+  "fields": { "required": [], "specific": [] },
+  "advanced": {}
+}

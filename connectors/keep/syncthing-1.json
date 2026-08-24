@@ -1,0 +1,31 @@
+{
+  "id": "syncthing-1",
+  "group": "syncthing",
+  "name": "Syncthing",
+  "version": "1",
+  "category": "Werkzeuge",
+  "icon": "🔄",
+  "summary": "Dateien zwischen Geräten synchronisieren",
+  "description": "",
+  "runtime": "docker",
+  "image": "lscr.io/linuxserver/syncthing:latest",
+  "container_port": 8384,
+  "protocol": "tcp",
+  "http": true,
+  "default_exposure": "external",
+  "data": {
+    "container_path": "/config",
+    "label": "Konfiguration + synchronisierte Ordner"
+  },
+  "env": {
+    "PUID": "1000",
+    "PGID": "1000",
+    "TZ": "Europe/Berlin"
+  },
+  "notes": [
+    "Weboberfläche über die Domain. Für direkte Geräte-Synchronisation Port 22000 zusätzlich freigeben.",
+    "Falls die Oberfläche eine Host-Warnung zeigt: in Syncthing die Host-Prüfung anpassen."
+  ],
+  "fields": { "required": [], "specific": [] },
+  "advanced": {}
+}
