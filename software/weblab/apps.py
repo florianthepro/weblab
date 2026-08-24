@@ -370,11 +370,13 @@ def install(connector_id, form, seed_dir=None, extra_env=None):
     manage_domain = store.get_setting("manage_domain", "")
     manage_host = (form.get("manage_host") or "").strip().lower() \
         or default_manage_host(connector, manage_domain)
+    app_domain = (form.get("domain") or "").strip().lower()
+    app_domain = app_domain.split("://")[-1].split("/")[0].split(":")[0].strip(". ")
 
     app = {
         "slug": slug, "name": name, "connector_id": connector["id"],
         "group_id": connector["group"], "version": connector["version"],
-        "domain": (form.get("domain") or "").strip().lower(),
+        "domain": app_domain,
         "exposure": exposure, "allow_cidr": form.get("allow_cidr") or "",
         "host_port": host_port, "container_port": container_port,
         "location": form.get("location") or "docker",

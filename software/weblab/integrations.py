@@ -4,6 +4,7 @@ import hashlib
 import json
 import glob
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -42,6 +43,16 @@ def http_json(url, method="GET", headers=None, data=None, timeout=25):
         return {"success": False, "errors": [{"message": str(exc)}]}
 
 
+_HOST_RE = re.compile(
+    r"^(\*\.)?([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)(\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$")
+
+
+def _valid_host(host):
+    """Nur echte Hostnamen (klein, mit Punkt, ohne Schema/Pfad/Port) als Caddy-Site
+    zulassen — ein kaputter App-Domainname darf die ganze Konfiguration nicht sprengen."""
+    return bool(host) and len(host) <= 253 and bool(_HOST_RE.match(host))
+
+
 def render_caddyfile(manage_domain, app_routes, email=None, panel_hosts=None,
                      access="both", domain_ok=True, cert_hosts=None, https_ready=False):
     """app_routes: [{'domain':..., 'port':...}] — nur Apps mit Domain und http=true.
@@ -74,7 +85,9 @@ def render_caddyfile(manage_domain, app_routes, email=None, panel_hosts=None,
     out.append("")
     out.append("# HTTP-Ebene: IP-Zugriff und HTTP->HTTPS-Umleitung, sobald Zertifikat steht")
     out.append("http:// {")
-    named = panel_domain_hosts + app_domains
+    valid_routes = [r for r in app_routes if _valid_host(r.get("domain"))]
+    named = list(dict.fromkeys(h for h in (panel_domain_hosts + [r["domain"] for r in valid_routes])
+                               if _valid_host(h)))
     if named:
         out.append(f"\t@named host {' '.join(named)}")
         out.append("\thandle @named {")
@@ -89,24 +102,28 @@ def render_caddyfile(manage_domain, app_routes, email=None, panel_hosts=None,
         out.append(f"\t\tredir https://{manage_domain}{{uri}} temporary")
     out.append("\t}")
     out.append("}")
+
+    emitted = set()
+
+    def _site(host, body, comment):
+        # Ungültige oder doppelte Hosts überspringen: ein kaputter/doppelter Domainname
+        # darf nie die ganze Caddy-Konfiguration ungültig machen (sonst SSL/Route weg).
+        if not _valid_host(host) or host in emitted:
+            return
+        emitted.add(host)
+        out.extend(["", comment, f"{host} {{", *body, "}"])
+
+    panel_body = ["\tencode gzip zstd", f"\treverse_proxy 127.0.0.1:{PANEL_PORT}"]
     if want_domain:
-        out += ["", "# Verwaltungsoberfläche", f"{manage_domain} {{",
-                "\tencode gzip zstd", f"\treverse_proxy 127.0.0.1:{PANEL_PORT}", "}"]
+        _site(manage_domain, panel_body, "# Verwaltungsoberfläche")
         for host in panel_hosts:
-            out += ["", f"# App-Verwaltung: {host}", f"{host} {{",
-                    "\tencode gzip zstd", f"\treverse_proxy 127.0.0.1:{PANEL_PORT}", "}"]
-    for route in app_routes:
-        if not route.get("domain"):
-            continue
-        out += ["", f"# App: {route.get('name', route['domain'])}", f"{route['domain']} {{",
-                "\tencode gzip zstd", f"\treverse_proxy 127.0.0.1:{route['port']}", "}"]
-    known = {manage_domain, *panel_hosts, *app_domains}
+            _site(host, panel_body, f"# App-Verwaltung: {host}")
+    for route in valid_routes:
+        _site(route["domain"], ["\tencode gzip zstd",
+                                f"\treverse_proxy 127.0.0.1:{route['port']}"],
+              f"# App: {route.get('name', route['domain'])}")
     for host in (cert_hosts or []):
-        if host and host not in known:
-            known.add(host)
-            # Nur das Zertifikat holen; der Dienst (Mailserver) nutzt es selbst.
-            out += ["", f"# Zertifikat für Dienst {host}", f"{host} {{",
-                    "\trespond 204", "}"]
+        _site(host, ["\trespond 204"], f"# Zertifikat für Dienst {host}")
     return "\n".join(out) + "\n"
 
 
