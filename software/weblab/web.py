@@ -2140,6 +2140,16 @@ def _domain_watchdog():
 
 def serve():
     store.init()
+    # Beim Start die Reverse-Proxy-Konfiguration einmal aus dem aktuellen Code + den
+    # gespeicherten Einstellungen neu schreiben. So greift ein Update sofort (nach
+    # dem Neustart durch install.sh --update), ohne auf einen Zustandswechsel des
+    # Watchdogs zu warten. write_caddy schreibt nur bei echter Änderung neu (Diff-Guard),
+    # daher ist das idempotent und nie störend.
+    if store.is_setup_done():
+        try:
+            appsvc.sync_proxy()
+        except Exception:  # noqa: BLE001 - der Start darf daran nie scheitern
+            pass
     threading.Thread(target=_domain_watchdog, daemon=True).start()
     httpd = ThreadingHTTPServer((HOST, PORT), Handler)
     httpd.daemon_threads = True
