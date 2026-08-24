@@ -746,7 +746,8 @@ class Handler(BaseHTTPRequestHandler):
             f'{ui.esc(v["version"])}</option>' for v in group["versions"])
 
         required_html = "".join(
-            ui.field_input(f, f.get("default", "")) for f in connector["fields"].get("required", []))
+            ui.field_input(f, f.get("default", "")) for f in connector["fields"].get("required", [])
+            if not f.get("auto"))          # Zugangsdaten werden automatisch erzeugt
 
         locations = sysinfo.data_locations()
         loc_options = "".join(
@@ -867,7 +868,7 @@ class Handler(BaseHTTPRequestHandler):
         if connector:
             rows = ""
             for field in catalog.all_fields(connector):
-                if field.get("type") != "password":
+                if field.get("type") != "password" and not field.get("auto"):
                     continue
                 value = app["values"].get(field["key"], "")
                 if not value:

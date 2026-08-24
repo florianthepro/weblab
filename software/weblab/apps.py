@@ -324,6 +324,13 @@ def _run_app_container(app, connector):
         network=app["network"], hostname=hostname)
 
 
+def _gen_credential(kind):
+    """Zugangsdaten automatisch erzeugen: Benutzer -> 'admin', Passwort -> stark & zufaellig."""
+    if kind == "user":
+        return "admin"
+    return secrets.token_urlsafe(15)
+
+
 def install(connector_id, form, seed_dir=None, extra_env=None):
     """Neue App aus dem Katalog installieren. seed_dir: vorhandene Daten (Backup einer
     Alt-Installation), die vor dem ersten Start ins Datenverzeichnis gelegt werden.
@@ -343,6 +350,10 @@ def install(connector_id, form, seed_dir=None, extra_env=None):
         key = field["key"]
         if key in form or field.get("type") == "bool":
             values[key] = coerce(field, form.get(key))
+    for field in catalog.all_fields(connector):
+        # Zugangsdaten (admin/Passwort) automatisch erzeugen, wenn nichts angegeben wurde.
+        if field.get("auto") and not str(values.get(field["key"]) or "").strip():
+            values[field["key"]] = _gen_credential(field["auto"])
     for field in connector["fields"].get("required", []):
         if field.get("required") and values.get(field["key"]) in (None, ""):
             raise ValueError(f"Pflichtfeld fehlt: {field.get('label', field['key'])}")

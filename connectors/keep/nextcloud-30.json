@@ -33,23 +33,25 @@
         "label": "Admin-Benutzer",
         "type": "string",
         "default": "admin",
-        "required": true,
+        "required": false,
         "target": {
           "kind": "env",
           "name": "NEXTCLOUD_ADMIN_USER"
-        }
+        },
+        "auto": "user"
       },
       {
         "key": "admin_password",
         "label": "Admin-Passwort",
         "type": "password",
-        "required": true,
+        "required": false,
         "generate": true,
         "help": "Leer lassen = sicheres Passwort wird erzeugt.",
         "target": {
           "kind": "env",
           "name": "NEXTCLOUD_ADMIN_PASSWORD"
-        }
+        },
+        "auto": "password"
       }
     ],
     "specific": []
