@@ -772,7 +772,9 @@ class Handler(BaseHTTPRequestHandler):
  <div class="card"><h3>Basis</h3>
   <div class="field"><label for="name">Name</label>
    <input id="name" name="name" value="{ui.esc(group['name'])}" required></div>
-  {self._domain_field('', f"app.{store.get_setting('manage_domain', 'example.com')}")}
+  {self._domain_field(
+       f"{group_id}.{store.get_setting('manage_domain','')}" if store.get_setting('manage_domain','') else '',
+       f"{group_id}.{store.get_setting('manage_domain', 'example.com')}")}
   {manage_field}
   {self._exposure_field(exposure_default)}
   <div class="field" data-depends='{{"exposure":"specific"}}'>

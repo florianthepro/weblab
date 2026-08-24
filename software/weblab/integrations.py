@@ -527,6 +527,30 @@ def all_zones(accounts):
     return result
 
 
+def resolve_zone(accounts, hostname):
+    """Zone + Token zu einem Hostnamen — fragt die Kandidaten-Domains direkt bei
+    Cloudflare ab (funktioniert auch, wenn die allgemeine Zonen-Liste leer/dünn ist,
+    z. B. bei eng zugeschnittenen Tokens). Längste passende Domain gewinnt."""
+    host = (hostname or "").strip(".").lower()
+    if not host or "." not in host:
+        return None
+    labels = host.split(".")
+    candidates = [".".join(labels[i:]) for i in range(len(labels) - 1)]
+    for acc in accounts or []:
+        token = acc.get("token")
+        if not token:
+            continue
+        cf = Cloudflare(token)
+        for cand in candidates:
+            if "." not in cand:
+                continue
+            zid, _ = cf.zone_id(cand)
+            if zid:
+                return {"name": cand, "id": zid, "token": token,
+                        "account": acc.get("label", "")}
+    return None
+
+
 def token_for_host(accounts, hostname):
     """Token des Kontos, dessen Zone am besten zu hostname passt (längste Übereinstimmung)."""
     best, best_len = None, -1

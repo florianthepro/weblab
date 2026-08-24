@@ -20,24 +20,14 @@
   "env": {
     "OVERWRITEPROTOCOL": "https",
     "TRUSTED_PROXIES": "172.16.0.0/12",
-    "APACHE_DISABLE_REWRITE_IP": "1"
+    "APACHE_DISABLE_REWRITE_IP": "1",
+    "NEXTCLOUD_TRUSTED_DOMAINS": "{domain} {server_ip}"
   },
   "notes": [
     "Domain hier und im Feld „Domain“ gleich halten."
   ],
   "fields": {
     "required": [
-      {
-        "key": "trusted_domain",
-        "label": "Domain (Trusted Domain)",
-        "type": "string",
-        "required": true,
-        "help": "Die Domain, unter der Nextcloud läuft (z. B. cloud.example.com).",
-        "target": {
-          "kind": "env",
-          "name": "NEXTCLOUD_TRUSTED_DOMAINS"
-        }
-      },
       {
         "key": "admin_user",
         "label": "Admin-Benutzer",

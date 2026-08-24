@@ -54,9 +54,17 @@ def coerce(field, raw):
     return raw if raw is not None else field.get("default", "")
 
 
-def env_for(connector, values):
-    """Feste Connector-Env + alle Felder mit target.kind == 'env'."""
+def env_for(connector, values, domain="", server_ip="", manage_host=""):
+    """Feste Connector-Env + alle Felder mit target.kind == 'env'. In der festen Env
+    werden {domain}/{server_ip}/{manage_host} eingesetzt — so muss z. B. die
+    Nextcloud-Trusted-Domain nicht extra angegeben werden (nur die eine App-Domain)."""
     env = dict(connector.get("env") or {})
+    ctx = {"domain": domain or "", "server_ip": server_ip or "", "manage_host": manage_host or ""}
+    for key, val in list(env.items()):
+        if isinstance(val, str) and "{" in val:
+            for name, value in ctx.items():
+                val = val.replace("{" + name + "}", value)
+            env[key] = val.strip()
     for field in catalog.all_fields(connector):
         target = field.get("target") or {}
         if target.get("kind") != "env":
@@ -187,6 +195,9 @@ def apply_dns(app, connector, values):
     for record in plan:
         match = _zone_match(zones, record["name"])
         if not match:
+            # Zonen-Liste war leer/dünn -> Domain direkt bei Cloudflare auflösen und anlegen.
+            match = integrations.resolve_zone(accounts, record["name"])
+        if not match:
             problems.append(f"{record['name']}: keine passende Domain im Konto")
             continue
         ok, err = integrations.Cloudflare(match["token"]).set_record(
@@ -277,7 +288,8 @@ def _run_app_container(app, connector):
         os.makedirs(data_dir, exist_ok=True)
     volumes = ([(data_dir, connector.get("data", {}).get("container_path", "/data"))]
                if connector.get("data") else [])
-    env = env_for(connector, app["values"])
+    env = env_for(connector, app["values"], app.get("domain", ""),
+                  store.get_setting("server_ip", ""), app.get("manage_host", ""))
     env.update(app.get("import_env") or {})     # z. B. LEVEL fuer eine uebernommene Welt
     ports = port_binding(app["exposure"], app["host_port"], app["container_port"],
                          connector.get("protocol", "tcp"), connector)
