@@ -80,7 +80,20 @@ done
 
 echo "== Caddy-Startkonfiguration =="
 install -d /etc/caddy
-if [ ! -s /etc/caddy/Caddyfile ] || ! grep -q "8099" /etc/caddy/Caddyfile; then
+# Ist das Setup schon abgeschlossen? Dann schreibt weblab die Konfiguration beim
+# Dienststart ohnehin selbst neu — nur davor muss die Startkonfiguration passen.
+SETUP_DONE="$(python3 - 2>/dev/null <<'PYEOF' || echo 0
+import sqlite3
+try:
+    row = sqlite3.connect("/var/lib/weblab/weblab.db").execute(
+        "SELECT value FROM settings WHERE key='setup_done'").fetchone()
+    print(1 if row and row[0] == "1" else 0)
+except Exception:
+    print(0)
+PYEOF
+)"
+if [ "$SETUP_DONE" != "1" ] || [ ! -s /etc/caddy/Caddyfile ] \
+   || ! grep -q "8099" /etc/caddy/Caddyfile; then
   cp "$HERE/Caddyfile" /etc/caddy/Caddyfile
 fi
 caddy validate --config /etc/caddy/Caddyfile >/dev/null 2>&1 \
@@ -108,4 +121,4 @@ if ! systemctl is-active --quiet weblab; then
   journalctl -u weblab --no-pager -n 25 2>&1 | sed 's/^/    /' || true
 fi
 IP="$(curl -s --max-time 8 https://api.ipify.org || hostname -I | awk '{print $1}')"
-echo "== fertig. Oberfläche: http://${IP}  (Setup: Admin + Passwort + Domain) =="
+echo "== fertig. Oberfläche: https://${IP}  (Zertifikatswarnung beim ersten Mal ist normal: eigene CA) =="

@@ -54,8 +54,13 @@ def _valid_host(host):
 
 
 def render_caddyfile(manage_domain, app_routes, email=None, panel_hosts=None,
-                     access="both", domain_ok=True, cert_hosts=None, https_ready=False):
+                     access="both", domain_ok=True, cert_hosts=None, https_ready=False,
+                     server_ip=""):
     """app_routes: [{'domain':..., 'port':...}] — nur Apps mit Domain und http=true.
+    server_ip: (nur noch informativ, ungenutzt) — der IP-Zugang läuft über einen
+    Catch-all-HTTPS-Block mit interner CA (on_demand), der für JEDE angefragte
+    IP/Adresse beim Verbinden ein Zertifikat ausstellt. So sind Setup und
+    Anmeldung über die IP immer verschlüsselt, auch wenn sich die IP ändert.
     panel_hosts: zusätzliche Hostnamen (App-Verwaltungs-Subdomains), die auf das Panel zeigen.
     access: 'both' | 'domain' | 'ip' — worüber die Verwaltung erreichbar ist.
     domain_ok: zeigt der DNS-Eintrag noch hierher? Steuert NUR das IP-Failover:
@@ -107,13 +112,32 @@ def render_caddyfile(manage_domain, app_routes, email=None, panel_hosts=None,
         out.append("\t\tredir https://{host}{uri} permanent")
         out.append("\t}")
     out.append("\thandle {")
-    if ip_serves_panel:
-        out.append(f"\t\treverse_proxy 127.0.0.1:{PANEL_PORT}")
-    else:
+    if not ip_serves_panel:
         # Nur-Domain-Betrieb: IP-Aufruf zur Domain umleiten (temporär, damit der
         # Browser bei Failover/Rückschaltung die IP sofort wieder direkt erreicht).
         out.append(f"\t\tredir https://{manage_domain}{{uri}} temporary")
+    else:
+        # IP-Zugang immer verschlüsselt: auf HTTPS desselben Hosts umleiten — den
+        # Rest übernimmt der Catch-all unten (interne CA, on_demand).
+        out.append("\t\tredir https://{host}{uri} temporary")
     out.append("\t}")
+    out.append("}")
+
+    # Sicherheitsnetz für alles, was keine benannte Site trifft (IP-Zugriff, alte
+    # Namen): HTTPS mit Caddys interner CA. on_demand stellt beim Verbinden ein
+    # Zertifikat für GENAU die angefragte Adresse aus — funktioniert daher auch,
+    # wenn sich die Server-IP ändert, und leitet im Nur-Domain-Betrieb weiter.
+    out.append("")
+    out.append("# Panel über IP/unbekannte Namen — HTTPS mit interner CA (self-signed)")
+    out.append("https:// {")
+    out.append("\ttls internal {")
+    out.append("\t\ton_demand")
+    out.append("\t}")
+    if ip_serves_panel:
+        out.append("\tencode gzip zstd")
+        out.append(f"\treverse_proxy 127.0.0.1:{PANEL_PORT}")
+    else:
+        out.append(f"\tredir https://{manage_domain}{{uri}} temporary")
     out.append("}")
 
     emitted = set()
@@ -287,9 +311,10 @@ def retry_cert(domain):
 
 
 def write_caddy(manage_domain, app_routes, email=None, panel_hosts=None,
-                access="both", domain_ok=True, cert_hosts=None, https_ready=False):
+                access="both", domain_ok=True, cert_hosts=None, https_ready=False,
+                server_ip=""):
     content = render_caddyfile(manage_domain, app_routes, email, panel_hosts,
-                               access, domain_ok, cert_hosts, https_ready)
+                               access, domain_ok, cert_hosts, https_ready, server_ip)
     # Ein Schloss, damit Watchdog- und Anfrage-Threads sich nicht in die Quere kommen.
     with _caddy_lock:
         os.makedirs(os.path.dirname(CADDYFILE), exist_ok=True)
@@ -478,11 +503,12 @@ def plugin_download_url(source, project_id, loader=None, game_versions=None):
 
 
 def write_caddyfile_safe(manage_domain, app_routes, email=None, panel_hosts=None,
-                         access="both", domain_ok=True, cert_hosts=None, https_ready=False):
+                         access="both", domain_ok=True, cert_hosts=None, https_ready=False,
+                         server_ip=""):
     """Wie write_caddy, wirft aber nicht."""
     try:
         write_caddy(manage_domain, app_routes, email, panel_hosts, access, domain_ok,
-                    cert_hosts, https_ready)
+                    cert_hosts, https_ready, server_ip)
         return True, None
     except Exception as exc:  # noqa: BLE001 - bewusst: Proxy-Fehler nur melden
         return False, str(exc)

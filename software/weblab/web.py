@@ -199,6 +199,43 @@ def run_setup(username, password, domain, access="both", cf_email="", cf_key="")
     threading.Thread(target=worker, daemon=True).start()
 
 
+# Hintergrund-Jobs mit Fortschritt: lange Aktionen (App installieren, Übernahme,
+# DNS verbinden) blockieren nie den Klick — der Browser landet sofort auf einer
+# Fortschrittsseite, die den Job abfragt und am Ende weiterleitet.
+JOBS = {}
+_JOBS_MAX = 40
+
+
+def start_job(title, worker, fallback="/apps"):
+    """worker(progress, job) läuft im Hintergrund; progress(percent, step) meldet den
+    Stand, job["note"] kann Hinweise für die Fertig-Anzeige aufnehmen. Rückgabewert
+    des Workers = Ziel nach Erfolg (z. B. /apps/7). Liefert die Job-ID."""
+    if len(JOBS) > _JOBS_MAX:                       # nur FERTIGE alte Jobs vergessen —
+        for old_id in list(JOBS):                   # laufende behalten ihre Anzeige
+            if len(JOBS) <= _JOBS_MAX:
+                break
+            old = JOBS[old_id]
+            if old.get("done") or old.get("error"):
+                JOBS.pop(old_id, None)
+    job_id = secrets.token_urlsafe(9)
+    job = {"title": title, "percent": 3, "step": "Wird gestartet …",
+           "done": False, "error": None, "redirect": fallback, "note": ""}
+    JOBS[job_id] = job
+
+    def run():
+        try:
+            def progress(percent, step):
+                job.update({"percent": int(percent), "step": step})
+            target = worker(progress, job)
+            job.update({"percent": 100, "step": "Fertig", "done": True,
+                        "redirect": target or fallback})
+        except Exception as exc:  # noqa: BLE001 - Fehler dem Nutzer zeigen
+            job.update({"error": ui.esc(str(exc))})
+
+    threading.Thread(target=run, daemon=True).start()
+    return job_id
+
+
 # Request-Handler
 class Handler(BaseHTTPRequestHandler):
     server_version = "weblab"
@@ -277,7 +314,8 @@ class Handler(BaseHTTPRequestHandler):
 
     # Bereiche, die nur der Administrator sehen darf (Nutzer werden umgeleitet).
     ADMIN_AREAS = ("/apps/catalog", "/apps/install", "/network", "/storage",
-                   "/users", "/transfer", "/settings", "/api/stats", "/api/setup", "/banner")
+                   "/users", "/transfer", "/settings", "/api/stats", "/api/setup",
+                   "/banner", "/jobs", "/api/jobs")
 
     def _authz(self, path):
         """Zugriffskontrolle fuer eingeschraenkte Nutzer. True = abgewiesen (Antwort schon gesendet).
@@ -408,6 +446,16 @@ class Handler(BaseHTTPRequestHandler):
             return self.page_dashboard()
         if path == "/apps":
             return self.page_apps()
+        match = re.fullmatch(r"/jobs/([\w-]+)", path)
+        if match:
+            return self.page_job(match.group(1))
+        match = re.fullmatch(r"/api/jobs/([\w-]+)", path)
+        if match:
+            return self._json(JOBS.get(match.group(1))
+                              or {"error": "Vorgang nicht mehr vorhanden — möglicherweise "
+                                           "wurde der Dienst neu gestartet. Bitte den Stand "
+                                           'unter <a href="/apps">Apps</a> prüfen.',
+                                  "done": False, "redirect": "/apps"})
         if path == "/transfer":
             return self.page_transfer()
         if path == "/api/stats":
@@ -502,29 +550,30 @@ class Handler(BaseHTTPRequestHandler):
         if store.is_setup_done():
             return self._redirect("/login")
         server_ip = store.get_setting("server_ip") or ""
+        domain_hint = ("Optional. Der A-Record der Domain muss auf diesen Server zeigen"
+                       + (f" ({server_ip})" if server_ip else "") + ". Leer = Zugang nur über die IP.")
         body = f"""<div class="box">
 <div class="card">
 <h1>weblab einrichten</h1>
-<p class="sub">Konto und Domain festlegen.</p>
-<div class="steps"><div class="on">1 · Konto &amp; Domain</div><div>2 · Einrichtung</div><div>3 · Fertig</div></div>
+<div class="steps"><div class="on">1 · Konto</div><div>2 · Einrichtung</div><div>3 · Fertig</div></div>
 <form method="post" action="/setup">
  <div class="field"><label for="username">Admin-Benutzer</label>
   <input id="username" name="username" type="text" value="admin" required autocomplete="username"
    autocapitalize="none" autocorrect="off" spellcheck="false"></div>
  <div class="field"><label for="password">Passwort</label>
   <input id="password" name="password" type="password" required minlength="10"
-   autocomplete="new-password" autocapitalize="none" autocorrect="off" spellcheck="false">
-  <p class="help">Mindestens 10 Zeichen.</p></div>
- <div class="field"><label for="access">Verwaltung erreichbar über</label>
+   placeholder="mindestens 10 Zeichen"
+   autocomplete="new-password" autocapitalize="none" autocorrect="off" spellcheck="false"></div>
+ <div class="field"><label for="domain">Domain{ui.hint_icon(domain_hint)}</label>
+  <input id="domain" name="domain" placeholder="example.com (optional)"></div>
+{ui.section("Erweitert", f'''
+ <div class="field"><label for="access">Verwaltung erreichbar über{ui.hint_icon(
+     "Bei Nur Domain leitet die IP auf die Domain um, sobald deren Zertifikat steht.")}</label>
   <select id="access" name="access">
    <option value="both">Domain und IP</option>
    <option value="domain">Nur Domain</option>
-   <option value="ip">Nur IP-Adresse</option>
-  </select></div>
- <div class="field"><label for="domain">Verwaltungs-Domain</label>
-  <input id="domain" name="domain" placeholder="example.com">
-  <p class="help">A-Record (@) muss auf diesen Server zeigen{f' ({ui.esc(server_ip)})' if server_ip else ''}. Bei „Nur IP" leer lassen.</p></div>
- <button class="btn primary" type="submit" style="width:100%">Einrichtung starten</button>
+  </select></div>''')}
+ <button class="btn primary" type="submit" style="width:100%;margin-top:14px">Einrichtung starten</button>
 </form></div></div>"""
         self._send(ui.bare("Einrichten", body))
 
@@ -537,12 +586,10 @@ class Handler(BaseHTTPRequestHandler):
         access = form.get("access") or "both"
         if access not in ("both", "domain", "ip"):
             access = "both"
-        if access == "ip":
-            domain = ""
+        if not domain:
+            access = "ip"        # ohne Domain automatisch IP-Zugang — keine Extra-Frage
         if not username or len(password) < 10:
             return self._redirect("/setup", ("err", "Bitte Benutzer und Passwort (mind. 10 Zeichen) angeben."))
-        if access in ("both", "domain") and not domain:
-            return self._redirect("/setup", ("err", 'Für den Domain-Zugang bitte eine Domain angeben — oder „Nur IP" wählen.'))
         run_setup(username, password, domain, access)
         return self._redirect("/setup/progress")
 
@@ -586,18 +633,62 @@ class Handler(BaseHTTPRequestHandler):
    }).catch(function(){setTimeout(waitCert,4000)});
   })();
  }
+ var fails=0;
  function tick(){
   fetch('/api/setup/status').then(function(r){return r.json()}).then(function(s){
+   fails=0;
    document.getElementById('bar').style.width=(s.percent||0)+'%';
    document.getElementById('pct').textContent=(s.percent||0)+' %';
    if(s.step)step.textContent=s.step;
    if(s.error){errEl.innerHTML='<div class="msg err">'+s.error+'</div>';return;}
    if(s.done){finish(s);return;}
    setTimeout(tick,900);
-  }).catch(function(){setTimeout(tick,1500)});
+  }).catch(function(){
+   // Mehrfach keine Antwort: Seite neu laden — folgt z. B. der frisch aktivierten
+   // HTTPS-Umleitung, statt auf der alten Verbindung ewig zu warten.
+   if(++fails>=5){location.reload();return;}
+   setTimeout(tick,1500)});
  } tick();})();
 </script>"""
         self._send(ui.bare("Einrichtung", body))
+
+    def page_job(self, job_id):
+        job = JOBS.get(job_id)
+        if not job:
+            return self._redirect("/apps", ("err", "Vorgang nicht (mehr) vorhanden."))
+        body = f"""<div class="box"><div class="card">
+<h1>{ui.esc(job['title'])}</h1>
+<p class="sub" id="step">Bitte warten …</p>
+<div class="progress"><i id="bar"></i></div>
+<p class="help" id="pct">0 %</p>
+<div id="err"></div>
+</div></div>
+<script>
+(function(){{
+ var step=document.getElementById('step'),errEl=document.getElementById('err'),fails=0;
+ function tick(){{
+  fetch('/api/jobs/{ui.esc(job_id)}').then(function(r){{return r.json()}}).then(function(s){{
+   fails=0;
+   document.getElementById('bar').style.width=(s.percent||0)+'%';
+   document.getElementById('pct').textContent=(s.percent||0)+' %';
+   if(s.step)step.textContent=s.step;
+   if(s.error){{errEl.innerHTML='<div class="msg err">'+s.error+'</div>'+
+     '<p class="help"><a href="'+(s.redirect||'/apps')+'">Zurück</a></p>';return;}}
+   if(s.done){{
+    if(s.note){{step.textContent='Fertig.';
+      errEl.innerHTML='<div class="msg">'+s.note+'</div>'+
+        '<p class="help"><a class="btn primary" href="'+(s.redirect||'/apps')+'">Weiter</a></p>';
+      return;}}
+    location.href=(s.redirect||'/apps');return;}}
+   setTimeout(tick,900);
+  }}).catch(function(){{
+   // Mehrfach keine Antwort (Sitzung abgelaufen, Dienst-Neustart): Seite neu laden
+   // statt still ewig weiterzupollen.
+   if(++fails>=5){{location.reload();return;}}
+   setTimeout(tick,1500)}});
+ }} tick();}})();
+</script>"""
+        self._send(ui.bare(job["title"], body))
 
     def page_login(self):
         if not store.is_setup_done():
@@ -732,16 +823,17 @@ class Handler(BaseHTTPRequestHandler):
         self._render("Übernehmen", body, "/apps")
 
     def do_transfer(self, form):
-        try:
+        def worker(progress, job):
+            progress(10, "Alt-Installation wird gesichert …")
             app = transfer.take_over(form.get("connector_id", ""), form.get("path", ""),
                                      form={"exposure": "external"})
-        except Exception as exc:  # noqa: BLE001
-            return self._redirect("/transfer", ("err", f"Übernahme fehlgeschlagen: {exc}"))
-        note = f"{app['name']} übernommen — Daten eingespielt."
-        warnings = app.get("warnings") or []
-        if warnings:
-            note += " Hinweise: " + "; ".join(warnings)
-        return self._redirect(f"/apps/{app['id']}", ("ok", note))
+            warnings = app.get("warnings") or []
+            if warnings:
+                job["note"] = ui.esc("Hinweise: " + "; ".join(warnings))
+            return f"/apps/{app['id']}"
+
+        job_id = start_job("Alte Software übernehmen", worker, fallback="/transfer")
+        return self._redirect(f"/jobs/{job_id}")
 
     def page_apps(self):
         installed = (store.list_apps() if self._is_admin()
@@ -884,9 +976,20 @@ class Handler(BaseHTTPRequestHandler):
             f'<option value="{ui.esc(v["id"])}"{" selected" if v["id"] == connector["id"] else ""}>'
             f'{ui.esc(v["version"])}</option>' for v in group["versions"])
 
+        # Konto-Felder (auto) bleiben sichtbar, sind aber optional: leer = weblab
+        # erzeugt sie sicher selbst. Alles andere (z. B. Datenbank) läuft unsichtbar.
+        def _render_field(f):
+            if not f.get("auto"):
+                return ui.field_input(f, f.get("default", ""))
+            opt = dict(f)
+            opt["required"] = False
+            opt["placeholder"] = "leer = automatisch"
+            opt.setdefault("help", "Leer lassen — weblab erzeugt sichere Zugangsdaten "
+                                   "und zeigt sie nach der Installation an.")
+            return ui.field_input(opt, "")
+
         required_html = "".join(
-            ui.field_input(f, f.get("default", "")) for f in connector["fields"].get("required", [])
-            if not f.get("auto"))          # Zugangsdaten werden automatisch erzeugt
+            _render_field(f) for f in connector["fields"].get("required", []))
 
         # App-eigene Datenbank: nur die Art wählen — Einrichtung, Zugangsdaten und
         # Betrieb laufen komplett im Hintergrund (keine Passwörter im Interface).
@@ -967,19 +1070,18 @@ class Handler(BaseHTTPRequestHandler):
         self._render(group["name"], body, "/apps")
 
     def do_install(self, form):
-        try:
-            app = appsvc.install(form.get("connector_id", ""), form)
-        except Exception as exc:  # noqa: BLE001
-            return self._redirect(f"/apps/catalog/{form.get('group', '')}" if form.get("group")
-                                  else "/apps", ("err", f"Installation fehlgeschlagen: {exc}"))
-        warnings = app.get("warnings") or []
-        note = f"{app['name']} wurde installiert."
-        dns_done = app.get("dns_done") or []
-        if dns_done:
-            note += f" DNS gesetzt: {', '.join(dns_done)}."
-        if warnings:
-            note += " Hinweise: " + "; ".join(warnings)
-        return self._redirect(f"/apps/{app['id']}", ("ok", note))
+        connector = catalog.get(form.get("connector_id", "")) or {}
+        name = (form.get("name") or connector.get("name") or "App").strip()
+
+        def worker(progress, job):
+            app = appsvc.install(form.get("connector_id", ""), form, progress=progress)
+            warnings = app.get("warnings") or []
+            if warnings:
+                job["note"] = ui.esc("Hinweise: " + "; ".join(warnings))
+            return f"/apps/{app['id']}"
+
+        job_id = start_job(f"{name} installieren", worker, fallback="/apps")
+        return self._redirect(f"/jobs/{job_id}")
 
     # App-Detail, Einstellungen, Aktionen
     def _app_and_connector(self, app_id):
@@ -1405,11 +1507,13 @@ class Handler(BaseHTTPRequestHandler):
             for acc in accounts:
                 cloudflare = integrations.Cloudflare(acc["token"])
                 valid, info = cloudflare.verify()
-                zones = ", ".join(z["name"] for z in cloudflare.zones()) if valid else ""
+                # Nur die Anzahl zeigen — die Domain-Auswahl passiert bei der App;
+                # die vollständige Liste gehört zu Cloudflare, nicht hierher.
+                count = len(cloudflare.zones()) if valid else 0
                 state = ('<span class="pill run"><span class="dot"></span>verknüpft</span>' if valid
                          else f'<span class="pill err"><span class="dot"></span>{ui.esc(info)}</span>')
-                zones_html = (f'<p class="help" style="margin:4px 0 0">Domains: '
-                              f'<span class="mono">{ui.esc(zones)}</span></p>' if zones else "")
+                zones_html = (f' <span class="pill">{count} Domain{"s" if count != 1 else ""}</span>'
+                              if valid else "")
                 rows += f"""<div class="between acctrow">
 <div>{state} &nbsp;<span class="mono">{ui.esc(acc['label'])}</span>{zones_html}</div>
 <form method="post" action="/network">{ui.csrf_input(self.csrf)}
@@ -1420,8 +1524,7 @@ class Handler(BaseHTTPRequestHandler):
             head = (f'<div class="between" style="margin-bottom:12px">'
                     f'<span class="muted">Verbundene DNS-Konten</span>{connect}</div>{rows}')
         else:
-            head = (f'<div class="between"><div><p class="help" style="margin:0">Noch kein DNS-Konto '
-                    f'verbunden. Danach legt weblab die Einträge je App automatisch an.</p></div>'
+            head = (f'<div class="between"><span class="muted">Kein DNS-Konto verbunden</span>'
                     f'{connect}</div>')
         return head + self._cf_dialog()
 
@@ -1434,9 +1537,9 @@ class Handler(BaseHTTPRequestHandler):
 <input type="hidden" name="action" value="cf_link">
 <div class="field"><label for="cf_email">Konto-E-Mail</label>
  <input id="cf_email" name="cf_email" type="email" required autocomplete="off"></div>
-<div class="field"><label for="cf_key">Global API Key</label>
- <input id="cf_key" name="cf_key" type="password" required autocomplete="off">
- <p class="help">Wird nicht gespeichert — weblab erzeugt daraus einen Token nur für DNS.</p></div>
+<div class="field"><label for="cf_key">Global API Key{ui.hint_icon(
+  'Wird nicht gespeichert — weblab erzeugt daraus einen Token nur für DNS.')}</label>
+ <input id="cf_key" name="cf_key" type="password" required autocomplete="off"></div>
 <button class="btn" type="submit">Verbinden</button></form>
 <hr style="border:0;border-top:1px solid var(--line);margin:16px 0">
 <form method="post" action="/network">{ui.csrf_input(self.csrf)}
@@ -1449,11 +1552,10 @@ class Handler(BaseHTTPRequestHandler):
 <button class="btn" type="submit">Mit Cloudflare anmelden</button></form>"""
         inner = f"""<form method="post" action="/network">{ui.csrf_input(self.csrf)}
 <input type="hidden" name="action" value="cf_token">
-<div class="field"><label for="cf_api_token">API-Token</label>
+<div class="field"><label for="cf_api_token">API-Token{ui.hint_icon(
+  'Cloudflare -> Profil -> API-Tokens -> Vorlage "Zone-DNS bearbeiten", alle Zonen auswählen.')}</label>
  <input id="cf_api_token" name="cf_api_token" type="password" required autocomplete="off"
-  placeholder="Token einfügen">
- <p class="help">Cloudflare → Profil → API-Tokens → Vorlage „Zone-DNS bearbeiten“,
- alle Zonen auswählen.</p></div>
+  placeholder="Token einfügen"></div>
 <button class="btn primary" type="submit">Verbinden</button></form>
 {ui.section("Andere Wege", other)}"""
         return ui.modal("cfDialog", "DNS-Konto verbinden", inner)
@@ -1737,24 +1839,38 @@ Adresse hier eintragen (der Schlüssel wird nur für diesen Ausgang gespeichert)
                                       else ("err", f"Proxy: {err}"))
             if action == "cf_token":
                 token = (form.get("cf_api_token") or "").strip()
-                ok, info = integrations.Cloudflare(token).verify() if token else (False, "leer")
-                if not ok:
-                    return self._redirect("/network", ("err", f"Token ungültig: {info}"))
-                store.add_cf_account("API-Token", token)
-                integrations.invalidate_dns_cache()
-                store.set_setting("cf_status", "verknüpft")
-                return self._redirect("/network", ("ok", "DNS-Konto verbunden."))
+
+                def token_worker(progress, job):
+                    progress(20, "Token wird geprüft …")
+                    ok, info = integrations.Cloudflare(token).verify() if token else (False, "leer")
+                    if not ok:
+                        raise ValueError(f"Token ungültig: {info}")
+                    store.add_cf_account("API-Token", token)
+                    integrations.invalidate_dns_cache()
+                    store.set_setting("cf_status", "verknüpft")
+                    progress(70, "Domains werden geladen …")
+                    integrations.all_zones(store.cf_accounts())   # Cache vorwärmen
+                    return "/network"
+
+                return self._redirect(f"/jobs/{start_job('DNS-Konto verbinden', token_worker, fallback='/network')}")
             if action == "cf_link":
                 email = form.get("cf_email", "").strip()
-                token, err = integrations.link_account(
-                    email, form.get("cf_key", ""),
-                    label=store.get_setting("manage_domain", "weblab"))
-                if not token:
-                    return self._redirect("/network", ("err", f"Verknüpfung fehlgeschlagen: {err}"))
-                store.add_cf_account(email or "Cloudflare", token)
-                integrations.invalidate_dns_cache()
-                store.set_setting("cf_status", "verknüpft")
-                return self._redirect("/network", ("ok", "DNS-Konto verbunden."))
+                cf_key = form.get("cf_key", "")
+
+                def link_worker(progress, job):
+                    progress(20, "Konto wird verknüpft …")
+                    token, err = integrations.link_account(
+                        email, cf_key, label=store.get_setting("manage_domain", "weblab"))
+                    if not token:
+                        raise ValueError(f"Verknüpfung fehlgeschlagen: {err}")
+                    store.add_cf_account(email or "Cloudflare", token)
+                    integrations.invalidate_dns_cache()
+                    store.set_setting("cf_status", "verknüpft")
+                    progress(70, "Domains werden geladen …")
+                    integrations.all_zones(store.cf_accounts())   # Cache vorwärmen
+                    return "/network"
+
+                return self._redirect(f"/jobs/{start_job('DNS-Konto verbinden', link_worker, fallback='/network')}")
             if action == "cf_unlink":
                 store.remove_cf_account(form.get("account_id", ""))
                 integrations.invalidate_dns_cache()
@@ -1888,8 +2004,8 @@ Adresse hier eintragen (der Schlüssel wird nur für diesen Ausgang gespeichert)
 <div class="field"><label for="np">Passwort</label>
  <input id="np" name="password" type="password" required minlength="10"></div>
 <div class="field"><label for="nr">Rolle</label><select id="nr" name="role">
- <option value="user">Nutzer (eingeschränkt — nur eigene, übertragene Apps)</option>
- <option value="admin">Administrator (voller Zugriff)</option></select></div>
+ <option value="user">Nutzer — nur eigene Apps</option>
+ <option value="admin">Administrator — voller Zugriff</option></select></div>
 <button class="btn primary" type="submit">Anlegen</button></form></div>
 <div class="card"><h3>Eigenes Passwort ändern</h3>
 <form method="post" action="/users">{ui.csrf_input(self.csrf)}

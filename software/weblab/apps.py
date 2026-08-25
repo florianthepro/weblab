@@ -263,7 +263,8 @@ def _sync_proxy_locked():
     https_ready = integrations.https_ready(manage_domain) if manage_domain else False
     return integrations.write_caddyfile_safe(manage_domain, routes, panel_hosts=panel_hosts,
                                              access=access, domain_ok=domain_ok,
-                                             cert_hosts=cert_hosts, https_ready=https_ready)
+                                             cert_hosts=cert_hosts, https_ready=https_ready,
+                                             server_ip=store.get_setting("server_ip", ""))
 
 
 def _ufw(*args):
@@ -513,10 +514,12 @@ def restart_app(app, connector=None):
     dockerctl.restart(app["slug"])
 
 
-def install(connector_id, form, seed_dir=None, extra_env=None):
+def install(connector_id, form, seed_dir=None, extra_env=None, progress=None):
     """Neue App aus dem Katalog installieren. seed_dir: vorhandene Daten (Backup einer
     Alt-Installation), die vor dem ersten Start ins Datenverzeichnis gelegt werden.
-    extra_env: zusaetzliche Container-Env (z. B. LEVEL fuer eine uebernommene Welt)."""
+    extra_env: zusaetzliche Container-Env (z. B. LEVEL fuer eine uebernommene Welt).
+    progress(percent, step): meldet den Stand an die Fortschrittsseite (optional)."""
+    progress = progress or (lambda percent, step: None)
     connector = catalog.get(connector_id)
     if not connector:
         raise ValueError("Connector nicht gefunden.")
@@ -594,8 +597,12 @@ def install(connector_id, form, seed_dir=None, extra_env=None):
     app["values"] = values          # fuer _run_app_container/_post_install (nicht in der DB-Spalte)
     app["import_env"] = dict(extra_env or {})
 
+    progress(15, "App-Paket wird geladen …")
     dockerctl.pull(connector["image"])
+    if db_choice(connector, values) == "mariadb":
+        progress(40, "Datenbank wird eingerichtet …")
     _run_app_container(app, connector)
+    progress(70, "App wird konfiguriert …")
     # Der Container läuft bereits — Fehler hier werden gemeldet, nicht geworfen.
     app["warnings"] = []
     def dns_step():
@@ -604,10 +611,12 @@ def install(connector_id, form, seed_dir=None, extra_env=None):
         if problem:
             raise RuntimeError(problem)
 
-    for label, step in (("Konfiguration", lambda: _post_install(app, connector, values)),
-                        ("Firewall", lambda: apply_firewall(app, connector)),
-                        ("DNS", dns_step),
-                        ("Reverse-Proxy", sync_proxy)):
+    for percent, label, step in (
+            (70, "Konfiguration", lambda: _post_install(app, connector, values)),
+            (82, "Firewall", lambda: apply_firewall(app, connector)),
+            (88, "DNS", dns_step),
+            (94, "Reverse-Proxy", sync_proxy)):
+        progress(percent, f"{label} …")
         try:
             step()
         except Exception as exc:  # noqa: BLE001 - nur melden, nicht abbrechen

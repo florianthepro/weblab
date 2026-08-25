@@ -2,9 +2,18 @@
 	admin 127.0.0.1:2019
 }
 
-# Start-Konfiguration: Panel über die Server-IP erreichbar.
-# Sobald im Setup eine Verwaltungs-Domain gesetzt wird, schreibt weblab diese Datei neu
-# (inklusive HTTPS für die Domain und je installierter Web-App eine eigene Domain).
-http:// {
+# Start-Konfiguration: Panel immer verschlüsselt (interne CA, self-signed) — egal
+# über welche IP oder welchen Namen der Server angesprochen wird (on_demand stellt
+# das Zertifikat beim Verbinden aus). Schon Setup und erste Anmeldung laufen so nie
+# über Klartext. Sobald im Setup eine Domain gesetzt wird, schreibt weblab diese
+# Datei neu (Let's Encrypt für die Domain + Routen je Web-App).
+https:// {
+	tls internal {
+		on_demand
+	}
 	reverse_proxy 127.0.0.1:8099
+}
+
+http:// {
+	redir https://{host}{uri} temporary
 }

@@ -125,6 +125,9 @@ table tr:hover td{background:var(--panel-2)}
 
 /* Formulare */
 label{display:block;font-size:13px;font-weight:600;margin:0 0 6px;color:var(--ink-2)}
+.hint{display:inline-block;margin-left:6px;color:var(--muted);font-weight:400;
+ font-size:12.5px;cursor:help;vertical-align:1px}
+.hint:hover,.hint:focus{color:var(--accent)}
 .help{font-size:12.5px;color:var(--muted);margin:5px 0 0;font-weight:400;line-height:1.5}
 input,select,textarea{width:100%;padding:8px 11px;border:1px solid var(--line);
  border-radius:var(--r-sm);background:var(--panel);color:var(--ink);font:inherit;
@@ -340,17 +343,24 @@ def status_pill(state):
 
 
 def _info_attr(text):
-    return f' data-info="{esc(text)}"' if text else ""
+    # Kurzerklärungen laufen als natives Tooltip (title) — keine Textwände im Layout.
+    return f' title="{esc(text)}"' if text else ""
 
 
-def _label_row(key, label, locked):
+def hint_icon(text):
+    """Kleines ⓘ neben dem Label: Erklärung nur bei Bedarf (Tooltip), nie als Fließtext."""
+    return (f'<span class="hint" tabindex="0" title="{esc(text)}">&#9432;</span>'
+            if text else "")
+
+
+def _label_row(key, label, locked, info=""):
     """Label-Zeile; bei gesperrten Feldern mit rotem Hinweis und Freischalten-Knopf."""
     if locked:
         return (f'<div class="lockrow"><label for="{esc(key)}">{esc(label)} '
                 f'<span class="locktag">🔒 im Betrieb gesperrt</span></label>'
                 f'<button type="button" class="lockbtn" data-unlock="{esc(key)}">'
                 f'Freischalten</button></div>')
-    return f'<label for="{esc(key)}">{esc(label)}</label>'
+    return f'<label for="{esc(key)}">{esc(label)}{hint_icon(info)}</label>'
 
 
 def field_input(field, value, prefix="", locked=False):
@@ -365,7 +375,9 @@ def field_input(field, value, prefix="", locked=False):
     locked = locked or field.get("locked", False)
     required = "" if locked else (" required" if field.get("required") else "")
     dis = " disabled" if locked else ""
-    info = _info_attr(field.get("help", ""))
+    help_text = field.get("help", "")
+    info = ""       # Erklärung wandert als ⓘ ans Label, nicht ans Eingabefeld
+    ph = f' placeholder="{esc(field["placeholder"])}"' if field.get("placeholder") else ""
     depends = ""
     if field.get("depends_on"):
         depends = f' data-depends=\'{html.escape(json.dumps(field["depends_on"]), quote=True)}\''
@@ -377,8 +389,8 @@ def field_input(field, value, prefix="", locked=False):
         lockbtn = (f'<button type="button" class="lockbtn" data-unlock="{esc(key)}">'
                    f'Freischalten</button>') if locked else ""
         control = (f'<div class="check"><input type="checkbox" id="{esc(key)}" '
-                   f'name="{esc(key)}" value="1"{checked}{dis}{info}>'
-                   f'<label for="{esc(key)}">{esc(label)} {locktag}</label>{lockbtn}'
+                   f'name="{esc(key)}" value="1"{checked}{dis}>'
+                   f'<label for="{esc(key)}">{esc(label)}{hint_icon(help_text)} {locktag}</label>{lockbtn}'
                    f'</div>')
         return f'<div class="{wrap}"{depends}>{control}</div>'
 
@@ -387,24 +399,24 @@ def field_input(field, value, prefix="", locked=False):
         options = "".join(
             f'<option value="{esc(opt)}"{" selected" if str(value) == str(opt) else ""}>'
             f'{esc(labels.get(opt, opt))}</option>' for opt in field.get("options", []))
-        control = f'<select id="{esc(key)}" name="{esc(key)}"{dis}{info}>{options}</select>'
+        control = f'<select id="{esc(key)}" name="{esc(key)}"{dis}>{options}</select>'
     elif ftype == "number":
         attrs = ""
         for attr in ("min", "max", "step"):
             if attr in field:
                 attrs += f' {attr}="{esc(field[attr])}"'
         control = (f'<input type="number" id="{esc(key)}" name="{esc(key)}" '
-                   f'value="{esc(value)}"{attrs}{required}{dis}{info}>')
+                   f'value="{esc(value)}"{attrs}{required}{dis}{ph}>')
     elif ftype == "password":
         control = (f'<input type="password" id="{esc(key)}" name="{esc(key)}" '
-                   f'value="" autocomplete="new-password"{required}{dis}{info}>')
+                   f'value="" autocomplete="new-password"{required}{dis}{ph}>')
     elif ftype == "textarea":
-        control = (f'<textarea id="{esc(key)}" name="{esc(key)}" rows="5"{dis}{info}>'
+        control = (f'<textarea id="{esc(key)}" name="{esc(key)}" rows="5"{dis}>'
                    f'{esc(value)}</textarea>')
     else:
         control = (f'<input type="text" id="{esc(key)}" name="{esc(key)}" '
-                   f'value="{esc(value)}"{required}{dis}{info}>')
-    return f'<div class="{wrap}"{depends}>{_label_row(key, label, locked)}{control}</div>'
+                   f'value="{esc(value)}"{required}{dis}{ph}>')
+    return f'<div class="{wrap}"{depends}>{_label_row(key, label, locked, help_text)}{control}</div>'
 
 
 def select_field(key, label, options, value, help_text="", option_labels=None, locked=False):
@@ -414,8 +426,8 @@ def select_field(key, label, options, value, help_text="", option_labels=None, l
         f'{esc(option_labels.get(o, o))}</option>' for o in options)
     dis = " disabled" if locked else ""
     wrap = "field locked" if locked else "field"
-    return (f'<div class="{wrap}">{_label_row(key, label, locked)}'
-            f'<select id="{esc(key)}" name="{esc(key)}"{dis}{_info_attr(help_text)}>'
+    return (f'<div class="{wrap}">{_label_row(key, label, locked, help_text)}'
+            f'<select id="{esc(key)}" name="{esc(key)}"{dis}>'
             f'{opts}</select></div>')
 
 
