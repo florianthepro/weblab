@@ -8,7 +8,7 @@
   "summary": "Diagramme und Flowcharts erstellen",
   "description": "",
   "runtime": "docker",
-  "image": "jgraph/drawio:latest",
+  "image": "jgraph/drawio:31.3.2",
   "container_port": 8080,
   "protocol": "tcp",
   "http": true,

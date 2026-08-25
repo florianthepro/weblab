@@ -1,0 +1,37 @@
+{
+  "id": "portainer-2",
+  "group": "portainer",
+  "name": "Portainer CE",
+  "version": "2",
+  "category": "Server",
+  "icon": "🐳",
+  "summary": "Docker-Verwaltung im Browser",
+  "description": "",
+  "runtime": "docker",
+  "image": "portainer/portainer-ce:2.39.6",
+  "container_port": 9000,
+  "protocol": "tcp",
+  "http": true,
+  "default_exposure": "internal",
+  "singleton": true,
+  "data": {
+    "container_path": "/data",
+    "label": "Portainer-Daten"
+  },
+  "env": {},
+  "volumes": [
+    {
+      "host": "/var/run/docker.sock",
+      "container": "/var/run/docker.sock"
+    }
+  ],
+  "fields": {
+    "required": [],
+    "specific": []
+  },
+  "advanced": {},
+  "notes": [
+    "Admin-Konto direkt nach der Installation anlegen — Portainer sperrt die Einrichtung nach wenigen Minuten.",
+    "Hat vollen Zugriff auf Docker — nur intern erreichbar lassen."
+  ]
+}

@@ -8,7 +8,7 @@
   "summary": "RSS-Reader",
   "description": "",
   "runtime": "docker",
-  "image": "lscr.io/linuxserver/freshrss:latest",
+  "image": "lscr.io/linuxserver/freshrss:1.29.1",
   "container_port": 80,
   "protocol": "tcp",
   "http": true,

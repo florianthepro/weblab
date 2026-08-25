@@ -1,0 +1,30 @@
+{
+  "id": "radarr-6",
+  "group": "radarr",
+  "name": "Radarr",
+  "version": "6",
+  "category": "Medien",
+  "icon": "🎥",
+  "summary": "Filme automatisch verwalten und laden",
+  "description": "",
+  "runtime": "docker",
+  "image": "lscr.io/linuxserver/radarr:6.3.0",
+  "container_port": 7878,
+  "protocol": "tcp",
+  "http": true,
+  "default_exposure": "internal",
+  "data": {
+    "container_path": "/config",
+    "label": "Konfiguration"
+  },
+  "env": {
+    "PUID": "1000",
+    "PGID": "1000",
+    "TZ": "Europe/Berlin"
+  },
+  "notes": [
+    "Beim ersten Start unter Einstellungen → Allgemein die Authentifizierung einrichten."
+  ],
+  "fields": { "required": [], "specific": [] },
+  "advanced": {}
+}

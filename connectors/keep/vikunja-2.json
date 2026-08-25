@@ -1,0 +1,29 @@
+{
+  "id": "vikunja-2",
+  "group": "vikunja",
+  "name": "Vikunja",
+  "version": "2",
+  "category": "Werkzeuge",
+  "icon": "✅",
+  "summary": "Aufgaben, Listen und Projekte im Team",
+  "description": "",
+  "runtime": "docker",
+  "image": "vikunja/vikunja:2.5",
+  "container_port": 3456,
+  "protocol": "tcp",
+  "http": true,
+  "default_exposure": "external",
+  "data": {
+    "container_path": "/app/vikunja/files",
+    "label": "Dateien + SQLite-Datenbank"
+  },
+  "env": {
+    "VIKUNJA_SERVICE_PUBLICURL": "https://{domain}",
+    "VIKUNJA_DATABASE_PATH": "/app/vikunja/files/vikunja.db"
+  },
+  "fields": { "required": [], "specific": [] },
+  "advanced": {},
+  "notes": [
+    "Erstes Konto über „Registrieren“ auf der Startseite anlegen."
+  ]
+}

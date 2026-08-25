@@ -8,7 +8,7 @@
   "summary": "Werkzeugsammlung",
   "description": "",
   "runtime": "docker",
-  "image": "corentinth/it-tools:latest",
+  "image": "corentinth/it-tools:2024.10.22-7ca5933",
   "container_port": 80,
   "protocol": "tcp",
   "http": true,

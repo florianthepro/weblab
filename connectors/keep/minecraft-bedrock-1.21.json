@@ -8,7 +8,7 @@
   "summary": "Bedrock-Server für Handy, Konsole und Windows",
   "description": "",
   "runtime": "docker",
-  "image": "itzg/minecraft-bedrock-server",
+  "image": "itzg/minecraft-bedrock-server:2026.8.2",
   "container_port": 19132,
   "protocol": "udp",
   "http": false,

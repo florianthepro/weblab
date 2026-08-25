@@ -8,7 +8,7 @@
   "summary": "VS Code im Browser",
   "description": "",
   "runtime": "docker",
-  "image": "lscr.io/linuxserver/code-server:latest",
+  "image": "lscr.io/linuxserver/code-server:4.134.0",
   "container_port": 8443,
   "protocol": "tcp",
   "http": true,

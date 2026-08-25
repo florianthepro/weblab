@@ -1,0 +1,30 @@
+{
+  "id": "bazarr-1",
+  "group": "bazarr",
+  "name": "Bazarr",
+  "version": "1",
+  "category": "Medien",
+  "icon": "💬",
+  "summary": "Untertitel für Filme und Serien laden",
+  "description": "",
+  "runtime": "docker",
+  "image": "lscr.io/linuxserver/bazarr:1.6.0",
+  "container_port": 6767,
+  "protocol": "tcp",
+  "http": true,
+  "default_exposure": "internal",
+  "data": {
+    "container_path": "/config",
+    "label": "Konfiguration"
+  },
+  "env": {
+    "PUID": "1000",
+    "PGID": "1000",
+    "TZ": "Europe/Berlin"
+  },
+  "notes": [
+    "Ergänzt Radarr und Sonarr — dort zuerst Medien einrichten, dann hier verbinden."
+  ],
+  "fields": { "required": [], "specific": [] },
+  "advanced": {}
+}

@@ -1,0 +1,31 @@
+{
+  "id": "searxng-2026",
+  "group": "searxng",
+  "name": "SearXNG",
+  "version": "2026",
+  "category": "Web",
+  "icon": "🔍",
+  "summary": "Private Metasuchmaschine",
+  "description": "",
+  "runtime": "docker",
+  "image": "searxng/searxng:2026.8.22-9fea41204",
+  "container_port": 8080,
+  "protocol": "tcp",
+  "http": true,
+  "default_exposure": "external",
+  "data": {
+    "container_path": "/etc/searxng",
+    "label": "Konfiguration"
+  },
+  "env": {
+    "SEARXNG_BASE_URL": "https://{domain}/"
+  },
+  "fields": {
+    "required": [],
+    "specific": []
+  },
+  "advanced": {},
+  "notes": [
+    "Geheimer Schlüssel wird beim ersten Start automatisch erzeugt."
+  ]
+}

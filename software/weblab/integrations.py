@@ -99,6 +99,12 @@ def render_caddyfile(manage_domain, app_routes, email=None, panel_hosts=None,
     if email:
         out.append(f"\temail {email}")
     out.append("\tadmin 127.0.0.1:2019")
+    # on_demand nur nach Rückfrage bei weblab: erlaubt interne Zertifikate NUR für
+    # IP-Adressen. Ohne diese Bremse würde der HTTPS-Catch-all auch für die
+    # Verwaltungs-Domain ein Self-signed-Zertifikat ausstellen und sie "vergiften".
+    out.append("\ton_demand_tls {")
+    out.append(f"\t\task http://127.0.0.1:{PANEL_PORT}/api/tls-ask")
+    out.append("\t}")
     out.append("}")
     out.append("")
     out.append("# HTTP-Ebene: IP-Zugriff und HTTP->HTTPS-Umleitung, sobald Zertifikat steht")
@@ -221,8 +227,13 @@ def caddy_cert_paths(domain):
     if not domain:
         return None, None
     base = os.path.join(CADDY_STORAGE, "certificates")
-    crt = sorted(glob.glob(os.path.join(base, "*", domain, f"{domain}.crt")))
-    key = sorted(glob.glob(os.path.join(base, "*", domain, f"{domain}.key")))
+    # Nur echte ACME-Zertifikate (Let's Encrypt/ZeroSSL) zählen — interne (Issuer
+    # "local", self-signed) sind kein "HTTPS steht": sonst leitete das Setup auf
+    # eine Domain mit Zertifikatswarnung weiter.
+    crt = sorted(p for p in glob.glob(os.path.join(base, "*", domain, f"{domain}.crt"))
+                 if not os.path.basename(os.path.dirname(os.path.dirname(p))).startswith("local"))
+    key = sorted(p for p in glob.glob(os.path.join(base, "*", domain, f"{domain}.key"))
+                 if not os.path.basename(os.path.dirname(os.path.dirname(p))).startswith("local"))
     return (crt[0], key[0]) if crt and key else (None, None)
 
 
@@ -284,12 +295,15 @@ def retry_cert(domain):
     safe = glob.escape(domain)   # Domain darf nie als Glob-Muster wirken
     with _caddy_lock:
         # Leere/fehlgeschlagene Zertifikatsordner der Domain entfernen. Ein gültiges
-        # (crt+key) bleibt stehen, damit wir nichts Funktionierendes zerstören.
+        # Let's-Encrypt-Paar (crt+key) bleibt stehen; ein INTERNES (self-signed,
+        # Issuer "local") fliegt immer raus — es würde die Domain sonst weiter
+        # "vergiften", obwohl ein echtes Zertifikat möglich ist.
         base = os.path.join(CADDY_STORAGE, "certificates")
         for issuer_dir in glob.glob(os.path.join(base, "*", safe)):
+            issuer = os.path.basename(os.path.dirname(issuer_dir))
             has_crt = os.path.exists(os.path.join(issuer_dir, f"{domain}.crt"))
             has_key = os.path.exists(os.path.join(issuer_dir, f"{domain}.key"))
-            if not (has_crt and has_key):
+            if issuer.startswith("local") or not (has_crt and has_key):
                 try:
                     shutil.rmtree(issuer_dir)
                 except OSError:

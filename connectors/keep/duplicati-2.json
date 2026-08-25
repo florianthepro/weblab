@@ -1,0 +1,64 @@
+{
+  "id": "duplicati-2",
+  "group": "duplicati",
+  "name": "Duplicati",
+  "version": "2",
+  "category": "Werkzeuge",
+  "icon": "💾",
+  "summary": "Verschlüsselte Backups auf Cloud & Co.",
+  "description": "",
+  "runtime": "docker",
+  "image": "lscr.io/linuxserver/duplicati:2.3.0",
+  "container_port": 8200,
+  "protocol": "tcp",
+  "http": true,
+  "default_exposure": "internal",
+  "data": {
+    "container_path": "/config",
+    "label": "Konfiguration + Backup-Datenbank"
+  },
+  "env": {
+    "TZ": "Europe/Berlin",
+    "PUID": "0",
+    "PGID": "0"
+  },
+  "volumes": [
+    {
+      "host": "/var/lib/weblab/data",
+      "container": "/source"
+    }
+  ],
+  "fields": {
+    "required": [
+      {
+        "key": "settings_encryption_key",
+        "label": "Schlüssel für Einstellungs-Verschlüsselung",
+        "type": "password",
+        "required": false,
+        "generate": true,
+        "target": {
+          "kind": "env",
+          "name": "SETTINGS_ENCRYPTION_KEY"
+        },
+        "auto": "password"
+      },
+      {
+        "key": "web_password",
+        "label": "Passwort der Weboberfläche",
+        "type": "password",
+        "required": false,
+        "generate": true,
+        "target": {
+          "kind": "env",
+          "name": "DUPLICATI__WEBSERVICE_PASSWORD"
+        },
+        "auto": "password"
+      }
+    ],
+    "specific": []
+  },
+  "advanced": {},
+  "notes": [
+    "Die Daten aller weblab-Apps liegen im Container unter /source als Backup-Quelle bereit."
+  ]
+}

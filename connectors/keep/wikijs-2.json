@@ -1,0 +1,36 @@
+{
+  "id": "wikijs-2",
+  "group": "wikijs",
+  "name": "Wiki.js",
+  "version": "2",
+  "category": "Wissen",
+  "icon": "📖",
+  "summary": "Modernes Wiki mit grafischem Editor",
+  "description": "",
+  "runtime": "docker",
+  "image": "ghcr.io/requarks/wiki:2.5",
+  "container_port": 3000,
+  "protocol": "tcp",
+  "http": true,
+  "default_exposure": "external",
+  "database": {
+    "default": "mariadb",
+    "choices": ["mariadb"],
+    "env": {
+      "mariadb": {
+        "DB_TYPE": "mariadb",
+        "DB_HOST": "{db_host}",
+        "DB_PORT": "3306",
+        "DB_NAME": "{db_name}",
+        "DB_USER": "{db_user}",
+        "DB_PASS": "{db_password}"
+      }
+    }
+  },
+  "fields": { "required": [], "specific": [] },
+  "advanced": {},
+  "notes": [
+    "Admin-Konto wird beim ersten Aufruf im Browser angelegt.",
+    "Alle Inhalte liegen in der Datenbank."
+  ]
+}

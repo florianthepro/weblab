@@ -8,7 +8,7 @@
   "summary": "Eigene Lesezeichen-Sammlung, selbst gehostet",
   "description": "",
   "runtime": "docker",
-  "image": "ghcr.io/shaarli/shaarli:latest",
+  "image": "ghcr.io/shaarli/shaarli:v0.16.5",
   "container_port": 80,
   "protocol": "tcp",
   "http": true,

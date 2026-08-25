@@ -1,0 +1,44 @@
+{
+  "id": "onlyoffice-9",
+  "group": "onlyoffice",
+  "name": "ONLYOFFICE Docs",
+  "version": "9",
+  "category": "Werkzeuge",
+  "icon": "📄",
+  "summary": "Office-Dokumente im Browser bearbeiten",
+  "description": "",
+  "runtime": "docker",
+  "image": "onlyoffice/documentserver:9.3",
+  "container_port": 80,
+  "protocol": "tcp",
+  "http": true,
+  "default_exposure": "external",
+  "data": {
+    "container_path": "/var/www/onlyoffice/Data",
+    "label": "Konfiguration + Zertifikate"
+  },
+  "env": {
+    "JWT_ENABLED": "true"
+  },
+  "fields": {
+    "required": [
+      {
+        "key": "jwt_secret",
+        "label": "JWT-Secret",
+        "type": "password",
+        "required": false,
+        "generate": true,
+        "target": {
+          "kind": "env",
+          "name": "JWT_SECRET"
+        },
+        "auto": "password"
+      }
+    ],
+    "specific": []
+  },
+  "advanced": {},
+  "notes": [
+    "Zur Anbindung (z. B. an Nextcloud) die App-Adresse als Dokumentenserver-URL und das JWT-Secret eintragen."
+  ]
+}

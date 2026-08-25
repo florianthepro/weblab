@@ -8,7 +8,7 @@
   "summary": "Download-Client mit Weboberfläche",
   "description": "",
   "runtime": "docker",
-  "image": "lscr.io/linuxserver/qbittorrent:latest",
+  "image": "lscr.io/linuxserver/qbittorrent:5.2.3",
   "container_port": 8080,
   "protocol": "tcp",
   "http": true,

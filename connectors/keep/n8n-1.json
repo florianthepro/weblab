@@ -8,7 +8,7 @@
   "summary": "Abläufe automatisieren (Workflows, kein Code nötig)",
   "description": "",
   "runtime": "docker",
-  "image": "docker.n8n.io/n8nio/n8n",
+  "image": "docker.n8n.io/n8nio/n8n:2.36.7",
   "container_port": 5678,
   "protocol": "tcp",
   "http": true,

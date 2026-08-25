@@ -1,0 +1,31 @@
+{
+  "id": "jellyseerr-2",
+  "group": "jellyseerr",
+  "name": "Jellyseerr",
+  "version": "2",
+  "category": "Medien",
+  "icon": "🎟️",
+  "summary": "Medien-Wünsche für Jellyfin und Plex",
+  "description": "",
+  "runtime": "docker",
+  "image": "fallenbagel/jellyseerr:2.7.3",
+  "container_port": 5055,
+  "protocol": "tcp",
+  "http": true,
+  "default_exposure": "external",
+  "data": {
+    "container_path": "/app/config",
+    "label": "Konfiguration"
+  },
+  "env": {
+    "TZ": "Europe/Berlin"
+  },
+  "fields": {
+    "required": [],
+    "specific": []
+  },
+  "notes": [
+    "Verbindet sich bei der Einrichtung mit einem vorhandenen Jellyfin- oder Plex-Server."
+  ],
+  "advanced": {}
+}

@@ -8,7 +8,7 @@
   "summary": "PDFs bearbeiten: zusammenfügen, teilen, umwandeln",
   "description": "",
   "runtime": "docker",
-  "image": "stirlingtools/stirling-pdf:latest",
+  "image": "stirlingtools/stirling-pdf:2.14.3",
   "container_port": 8080,
   "protocol": "tcp",
   "http": true,

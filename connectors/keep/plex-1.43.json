@@ -1,0 +1,47 @@
+{
+  "id": "plex-1.43",
+  "group": "plex",
+  "name": "Plex",
+  "version": "1.43",
+  "category": "Medien",
+  "icon": "🍿",
+  "summary": "Medienserver für Filme, Serien und Musik",
+  "description": "",
+  "runtime": "docker",
+  "image": "lscr.io/linuxserver/plex:1.43.3",
+  "container_port": 32400,
+  "protocol": "tcp",
+  "http": true,
+  "default_exposure": "external",
+  "data": {
+    "container_path": "/config",
+    "label": "Konfiguration + Medien"
+  },
+  "env": {
+    "PUID": "1000",
+    "PGID": "1000",
+    "TZ": "Europe/Berlin",
+    "VERSION": "docker"
+  },
+  "fields": {
+    "required": [],
+    "specific": [
+      {
+        "key": "claim_token",
+        "label": "Plex-Claim-Token",
+        "type": "string",
+        "default": "",
+        "required": false,
+        "help": "Von plex.tv/claim — verknüpft den Server mit deinem Plex-Konto (4 Min. gültig).",
+        "target": {
+          "kind": "env",
+          "name": "PLEX_CLAIM"
+        }
+      }
+    ]
+  },
+  "notes": [
+    "Medien in einen Unterordner unter „Dateien“ legen und als Bibliothek hinzufügen."
+  ],
+  "advanced": {}
+}

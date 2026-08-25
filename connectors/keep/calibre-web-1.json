@@ -8,7 +8,7 @@
   "summary": "E-Book-Bibliothek im Browser lesen und verwalten",
   "description": "",
   "runtime": "docker",
-  "image": "lscr.io/linuxserver/calibre-web:latest",
+  "image": "lscr.io/linuxserver/calibre-web:0.6.27",
   "container_port": 8083,
   "protocol": "tcp",
   "http": true,

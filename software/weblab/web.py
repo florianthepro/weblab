@@ -199,6 +199,48 @@ def run_setup(username, password, domain, access="both", cf_email="", cf_key="")
     threading.Thread(target=worker, daemon=True).start()
 
 
+# Software-Update: Version prüfen (GitHub, stündlich gecacht) und per Klick
+# aktualisieren — der eigentliche Lauf passiert über die systemd-Update-Unit,
+# damit der Neustart von weblab das Update nicht selbst abbricht.
+VERSION_FILE = os.environ.get("WEBLAB_VERSION_FILE", "/opt/weblab/VERSION")
+UPDATE_SRC = os.environ.get("WEBLAB_SRC_DIR", "/opt/weblab/src")
+_UPDATE_CACHE = {"t": 0.0, "remote": ""}
+
+
+def current_version():
+    try:
+        return open(VERSION_FILE, encoding="utf-8").read().split()[0]
+    except (OSError, IndexError):
+        return ""
+
+
+def _repo_slug():
+    try:
+        cfg = open(os.path.join(UPDATE_SRC, ".git", "config"), encoding="utf-8").read()
+    except OSError:
+        return ""
+    m = re.search(r"github\.com[:/]([\w.-]+/[\w.-]+?)(?:\.git)?\s", cfg)
+    return m.group(1) if m else ""
+
+
+def remote_version():
+    now = time.time()
+    if now - _UPDATE_CACHE["t"] < 3600:
+        return _UPDATE_CACHE["remote"]
+    _UPDATE_CACHE["t"] = now
+    slug = _repo_slug()
+    if slug:
+        resp = integrations.http_json(
+            f"https://api.github.com/repos/{slug}/commits/main", timeout=8)
+        _UPDATE_CACHE["remote"] = (resp.get("sha") or "")[:7]
+    return _UPDATE_CACHE["remote"]
+
+
+def update_available():
+    cur, rem = current_version(), remote_version()
+    return bool(cur and rem) and not rem.startswith(cur[:7])
+
+
 # Hintergrund-Jobs mit Fortschritt: lange Aktionen (App installieren, Übernahme,
 # DNS verbinden) blockieren nie den Klick — der Browser landet sofort auf einer
 # Fortschrittsseite, die den Job abfragt und am Ende weiterleitet.
@@ -315,7 +357,7 @@ class Handler(BaseHTTPRequestHandler):
     # Bereiche, die nur der Administrator sehen darf (Nutzer werden umgeleitet).
     ADMIN_AREAS = ("/apps/catalog", "/apps/install", "/network", "/storage",
                    "/users", "/transfer", "/settings", "/api/stats", "/api/setup",
-                   "/banner", "/jobs", "/api/jobs")
+                   "/banner", "/jobs", "/api/jobs", "/update", "/api/version")
 
     def _authz(self, path):
         """Zugriffskontrolle fuer eingeschraenkte Nutzer. True = abgewiesen (Antwort schon gesendet).
@@ -386,6 +428,19 @@ class Handler(BaseHTTPRequestHandler):
             self._redirect(self.headers.get("Referer", "/"), ("err", str(exc)))
 
     def route_get(self, path):
+        if path == "/api/tls-ask":
+            # Caddy fragt (lokal), ob on_demand ein internes Zertifikat ausstellen darf.
+            # NUR für IP-Adressen erlauben: echte Domains bekommen ausschließlich ihr
+            # Let's-Encrypt-Zertifikat über ihre benannte Site — sonst würde der
+            # Catch-all die Domain mit einem Self-signed-Zertifikat vergiften.
+            name = self._query().get("domain", "")
+            try:
+                import ipaddress
+                ipaddress.ip_address(name)
+                return self._send("ok", 200, "text/plain")
+            except ValueError:
+                return self._send("nur IP-Adressen", 403, "text/plain")
+
         if not store.is_setup_done() and not path.startswith(("/setup", "/api/setup", "/static")):
             return self._redirect("/setup")
 
@@ -446,6 +501,11 @@ class Handler(BaseHTTPRequestHandler):
             return self.page_dashboard()
         if path == "/apps":
             return self.page_apps()
+        if path == "/api/version":
+            return self._json({"version": current_version(), "remote": remote_version(),
+                               "update": update_available()})
+        if path == "/update":
+            return self.page_update()
         match = re.fullmatch(r"/jobs/([\w-]+)", path)
         if match:
             return self.page_job(match.group(1))
@@ -543,6 +603,11 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/banner":
             store.set_setting("banner", "")
             return self._redirect(self.headers.get("Referer", "/"))
+        if path == "/update":
+            # Update über die systemd-Unit anstoßen (überlebt den weblab-Neustart).
+            subprocess.Popen(["systemctl", "start", "--no-block", "weblab-update.service"],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return self._redirect("/update")
         return self._redirect("/")
 
     # Setup + Login
@@ -690,6 +755,39 @@ class Handler(BaseHTTPRequestHandler):
 </script>"""
         self._send(ui.bare(job["title"], body))
 
+    def page_update(self):
+        cur = current_version()
+        body = f"""<div class="box"><div class="card">
+<h1>weblab wird aktualisiert</h1>
+<p class="sub" id="step">Neue Version wird geladen …</p>
+<div class="progress"><i id="bar" style="width:8%"></i></div>
+<p class="help" id="pct">Version {ui.esc(cur or '—')}</p>
+<div id="err"></div>
+</div></div>
+<script>
+(function(){{
+ var start='{ui.esc(cur)}',t0=Date.now(),bar=document.getElementById('bar'),
+     step=document.getElementById('step'),errEl=document.getElementById('err');
+ function tick(){{
+  var pct=Math.min(90,8+((Date.now()-t0)/240000)*82);   // ~4 min bis 90 %
+  bar.style.width=pct+'%';
+  fetch('/api/version').then(function(r){{return r.json()}}).then(function(v){{
+   if(v.version&&v.version!==start){{bar.style.width='100%';
+     step.textContent='Fertig — Version '+v.version+'.';
+     setTimeout(function(){{location.href='/'}},1200);return;}}
+   if(Date.now()-t0>600000){{
+     errEl.innerHTML='<div class="msg">Das dauert ungewöhnlich lange. '+
+       '<a href="/">Zum Dashboard</a></div>';return;}}
+   step.textContent='Update läuft — weblab startet gleich neu …';
+   setTimeout(tick,3000);
+  }}).catch(function(){{
+   step.textContent='Dienst startet neu …';        // Neustart: Ausfälle sind normal
+   setTimeout(tick,3000);
+  }});
+ }} tick();}})();
+</script>"""
+        self._send(ui.bare("Aktualisierung", body))
+
     def page_login(self):
         if not store.is_setup_done():
             return self._redirect("/setup")
@@ -774,8 +872,24 @@ class Handler(BaseHTTPRequestHandler):
             rows = ("<tr><td colspan='5' class='muted'>Noch keine App installiert — "
                     "<a href='/apps'>zum Katalog</a>.</td></tr>")
 
+        # Update-Hinweis (Prüfung stündlich gecacht, best-effort).
+        update_html = ""
+        try:
+            if update_available():
+                update_html = (f'<div class="card" style="margin-bottom:14px">'
+                               f'<div class="between"><div><b>Update verfügbar</b>'
+                               f'<p class="help" style="margin:2px 0 0">'
+                               f'{ui.esc(current_version())} → {ui.esc(remote_version())}</p></div>'
+                               f'<form method="post" action="/update">{ui.csrf_input(self.csrf)}'
+                               f'<button class="btn primary" type="submit">Jetzt aktualisieren'
+                               f'</button></form></div></div>')
+        except Exception:  # noqa: BLE001 - Anzeige darf das Dashboard nie stören
+            pass
+        version_note = f" · Version {ui.esc(current_version())}" if current_version() else ""
+
         body = f"""<h1>Dashboard</h1>
-<p class="sub">Läuft seit {ui.esc(sysinfo.human_uptime(info['uptime']))}</p>
+<p class="sub">Läuft seit {ui.esc(sysinfo.human_uptime(info['uptime']))}{version_note}</p>
+{update_html}
 <div class="grid g4">{cards}</div>
 <h2>Apps</h2>
 <div class="card"><div class="tbl-wrap"><table>
@@ -835,6 +949,28 @@ class Handler(BaseHTTPRequestHandler):
         job_id = start_job("Alte Software übernehmen", worker, fallback="/transfer")
         return self._redirect(f"/jobs/{job_id}")
 
+    _TRANSFER_SCAN = {"t": 0.0, "found": []}
+
+    def _transfer_hint(self):
+        """Karte 'Alte Software gefunden' — nur für Admins, Scan 10 min gecacht."""
+        if not self._is_admin():
+            return ""
+        cache = Handler._TRANSFER_SCAN
+        if time.time() - cache["t"] > 600:
+            try:
+                cache["found"] = transfer.scan()
+            except Exception:  # noqa: BLE001
+                cache["found"] = []
+            cache["t"] = time.time()
+        if not cache["found"]:
+            return ""
+        paths = ", ".join(d["path"] for d in cache["found"][:3])
+        return (f'<div class="card" style="margin-bottom:14px"><div class="between">'
+                f'<div><b>Alte Software gefunden</b>'
+                f'<p class="help" style="margin:2px 0 0"><span class="mono">{ui.esc(paths)}</span>'
+                f' — Daten können übernommen werden.</p></div>'
+                f'<a class="btn primary" href="/transfer">Übernehmen …</a></div></div>')
+
     def page_apps(self):
         installed = (store.list_apps() if self._is_admin()
                      else store.apps_for_owner(self.user["id"]))
@@ -874,18 +1010,8 @@ class Handler(BaseHTTPRequestHandler):
         count = sum(1 for g in catalog.groups() if any(v["id"] in news for v in g["versions"]))
         news_tag = f' <span class="badge">{count} neu</span>' if count else ""
 
-        try:
-            importable = transfer.scan()
-        except Exception:  # noqa: BLE001
-            importable = []
-        transfer_html = ("<div class='card'><div class='row' style='justify-content:space-between;"
-                         "align-items:center;gap:12px'><div><b>Vorhandene Software gefunden</b>"
-                         f"<div class='help' style='margin:2px 0 0'>{len(importable)} übernehmbar — "
-                         "Welt/Daten sichern und in eine App einspielen</div></div>"
-                         "<a class='btn primary' href='/transfer'>Übernehmen</a></div></div>"
-                         if importable else "")
         body = f"""<h1>Apps</h1>
-{transfer_html}
+{self._transfer_hint()}
 <h2>Installiert</h2>{installed_html}
 <h2>Katalog{news_tag}</h2>
 <div class="apps">{tiles}</div>"""
@@ -976,33 +1102,11 @@ class Handler(BaseHTTPRequestHandler):
             f'<option value="{ui.esc(v["id"])}"{" selected" if v["id"] == connector["id"] else ""}>'
             f'{ui.esc(v["version"])}</option>' for v in group["versions"])
 
-        # Konto-Felder (auto) bleiben sichtbar, sind aber optional: leer = weblab
-        # erzeugt sie sicher selbst. Alles andere (z. B. Datenbank) läuft unsichtbar.
-        def _render_field(f):
-            if not f.get("auto"):
-                return ui.field_input(f, f.get("default", ""))
-            opt = dict(f)
-            opt["required"] = False
-            opt["placeholder"] = "leer = automatisch"
-            opt.setdefault("help", "Leer lassen — weblab erzeugt sichere Zugangsdaten "
-                                   "und zeigt sie nach der Installation an.")
-            return ui.field_input(opt, "")
-
+        # Zugangsdaten (auto) und Datenbank laufen KOMPLETT im Hintergrund — im
+        # Formular bleiben nur die Felder, die wirklich eine Entscheidung sind.
         required_html = "".join(
-            _render_field(f) for f in connector["fields"].get("required", []))
-
-        # App-eigene Datenbank: nur die Art wählen — Einrichtung, Zugangsdaten und
-        # Betrieb laufen komplett im Hintergrund (keine Passwörter im Interface).
-        db_field = ""
-        spec = appsvc.db_spec(connector)
-        if spec:
-            choices = spec.get("choices") or ["mariadb"]
-            default_db = spec.get("default", choices[0])
-            opts = "".join(
-                f'<option value="{ui.esc(c)}"{" selected" if c == default_db else ""}>'
-                f'{ui.esc(appsvc.DB_LABELS.get(c, c))}</option>' for c in choices)
-            db_field = (f'<div class="field"><label for="database">Datenbank</label>'
-                        f'<select id="database" name="database">{opts}</select></div>')
+            ui.field_input(f, f.get("default", ""))
+            for f in connector["fields"].get("required", []) if not f.get("auto"))
 
         locations = sysinfo.data_locations()
         loc_options = "".join(
@@ -1029,41 +1133,37 @@ class Handler(BaseHTTPRequestHandler):
 <p class="sub">{ui.esc(group['summary'])}</p>
 <form method="post" action="/apps/install">
 {ui.csrf_input(self.csrf)}
-<div class="grid g2">
- <div class="card"><h3>App</h3>
+<div class="card" style="max-width:560px">
   <div class="field"><label for="connector_id">Version</label>
    <select id="connector_id" name="connector_id"
     onchange="location.href='/apps/catalog/{ui.esc(group_id)}?version='+this.value">{version_options}</select>
 </div>
-  {db_field}
-  {required_html}
- </div>
- <div class="card"><h3>Basis</h3>
   <div class="field"><label for="name">Name</label>
    <input id="name" name="name" value="{ui.esc(group['name'])}" required></div>
   {self._domain_field(self._suggested_domain(group_id),
        f"{group_id}.{store.get_setting('manage_domain', 'example.com')}")}
+  {required_html}
+</div>
+{ui.section("Zugriff", f'''
   {manage_field}
   {self._exposure_field(exposure_default)}
   <div class="field" data-depends='{{"exposure":"specific"}}'>
    <label for="allow_cidr">Erlaubte IPs/CIDR</label>
    <input id="allow_cidr" name="allow_cidr" placeholder="203.0.113.5/32"></div>
-  {self._egress_field('')}
- </div>
-</div>
-{ui.section("Erweitert", f'''
-<div class="field"><label for="host_port">Port <span class="muted">leer = automatisch</span></label>
- <input id="host_port" name="host_port" type="number" min="1" max="65535"></div>
+  {self._egress_field('')}''')}
+{ui.section("Ressourcen & Speicher", f'''
+<div class="row"><div class="field" style="flex:1"><label for="cpu">CPU (Kerne)</label>
+ <input id="cpu" name="cpu" type="number" step="0.1" min="0.1" value="1"></div>
+ <div class="field" style="flex:1"><label for="ram_mb">RAM (MB)</label>
+ <input id="ram_mb" name="ram_mb" type="number" min="128" value="1024"></div></div>
+<div class="field"><label for="host_port">Port{ui.hint_icon("Leer = automatisch")}</label>
+ <input id="host_port" name="host_port" type="number" min="1" max="65535" placeholder="automatisch"></div>
 {ui.select_field('location', 'Ablageort', ['docker', 'device'], 'docker', '',
                  {'docker': 'Docker (Container)', 'device': 'Auf dem Gerät (Host)'})}
 <div class="field"><label for="data_path">Datenlaufwerk</label>
  <select id="data_path" name="data_path">{loc_options}</select></div>
 <div class="field"><label for="network">Netzwerk / Subnetz</label>
- <select id="network" name="network">{net_options}</select></div>
-<div class="row"><div class="field" style="flex:1"><label for="cpu">CPU (Kerne)</label>
- <input id="cpu" name="cpu" type="number" step="0.1" min="0.1" value="1"></div>
- <div class="field" style="flex:1"><label for="ram_mb">RAM (MB)</label>
- <input id="ram_mb" name="ram_mb" type="number" min="128" value="1024"></div></div>''')}
+ <select id="network" name="network">{net_options}</select></div>''')}
 <div class="row" style="margin-top:16px"><button class="btn primary" type="submit">App installieren</button>
 <a class="btn" href="/apps">Abbrechen</a></div>
 </form>{ui.DEPENDS_JS}"""

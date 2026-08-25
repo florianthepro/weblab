@@ -1,0 +1,137 @@
+{
+  "id": "samba-ad-dc-4",
+  "group": "samba-ad-dc",
+  "name": "Samba AD-DC",
+  "version": "4",
+  "category": "Server",
+  "icon": "🏢",
+  "summary": "Active-Directory-Domänencontroller",
+  "description": "",
+  "runtime": "docker",
+  "image": "nowsci/samba-domain:20260801025201",
+  "http": false,
+  "singleton": true,
+  "cap_add": [
+    "NET_ADMIN"
+  ],
+  "fixed_ports": [
+    {
+      "port": 53,
+      "protocol": "tcp",
+      "name": "DNS"
+    },
+    {
+      "port": 53,
+      "protocol": "udp",
+      "name": "DNS"
+    },
+    {
+      "port": 88,
+      "protocol": "tcp",
+      "name": "Kerberos"
+    },
+    {
+      "port": 88,
+      "protocol": "udp",
+      "name": "Kerberos"
+    },
+    {
+      "port": 135,
+      "protocol": "tcp",
+      "name": "RPC"
+    },
+    {
+      "port": 139,
+      "protocol": "tcp",
+      "name": "NetBIOS"
+    },
+    {
+      "port": 389,
+      "protocol": "tcp",
+      "name": "LDAP"
+    },
+    {
+      "port": 389,
+      "protocol": "udp",
+      "name": "LDAP"
+    },
+    {
+      "port": 445,
+      "protocol": "tcp",
+      "name": "SMB"
+    },
+    {
+      "port": 464,
+      "protocol": "tcp",
+      "name": "Kerberos kpasswd"
+    },
+    {
+      "port": 464,
+      "protocol": "udp",
+      "name": "Kerberos kpasswd"
+    },
+    {
+      "port": 636,
+      "protocol": "tcp",
+      "name": "LDAPS"
+    },
+    {
+      "port": 3268,
+      "protocol": "tcp",
+      "name": "Global Catalog"
+    },
+    {
+      "port": 3269,
+      "protocol": "tcp",
+      "name": "Global Catalog (TLS)"
+    }
+  ],
+  "data": {
+    "container_path": "/var/lib/samba",
+    "label": "AD-Datenbank"
+  },
+  "volumes": [
+    {
+      "host": "/srv/weblab-samba-ad-dc/config",
+      "container": "/etc/samba/external"
+    }
+  ],
+  "env": {
+    "HOSTIP": "{server_ip}",
+    "DNSFORWARDER": "1.1.1.1"
+  },
+  "fields": {
+    "required": [
+      {
+        "key": "ad_domain",
+        "label": "AD-Domain (Realm)",
+        "type": "string",
+        "required": true,
+        "help": "Vollständiger DNS-Name der Domäne, z. B. ad.firma.de.",
+        "target": {
+          "kind": "env",
+          "name": "DOMAIN"
+        }
+      },
+      {
+        "key": "admin_password",
+        "label": "Administrator-Passwort",
+        "type": "password",
+        "required": false,
+        "generate": true,
+        "target": {
+          "kind": "env",
+          "name": "DOMAINPASS"
+        },
+        "auto": "password"
+      }
+    ],
+    "specific": []
+  },
+  "advanced": {},
+  "notes": [
+    "Belegt Port 53 — kollidiert mit anderen DNS-Diensten (z. B. AdGuard Home) auf demselben Server.",
+    "Der erste Start provisioniert die Domäne und kann einige Minuten dauern.",
+    "Anmeldung an der Domäne als „Administrator“ mit dem generierten Passwort."
+  ]
+}

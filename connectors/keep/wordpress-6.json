@@ -1,0 +1,40 @@
+{
+  "id": "wordpress-6",
+  "group": "wordpress",
+  "name": "WordPress",
+  "version": "6",
+  "category": "Web",
+  "icon": "📰",
+  "summary": "Das beliebteste CMS für Blogs und Websites",
+  "description": "",
+  "runtime": "docker",
+  "image": "wordpress:6.8-apache",
+  "container_port": 80,
+  "protocol": "tcp",
+  "http": true,
+  "default_exposure": "external",
+  "data": {
+    "container_path": "/var/www/html",
+    "label": "WordPress-Dateien (Themes, Plugins, Uploads)"
+  },
+  "env": {
+    "WORDPRESS_CONFIG_EXTRA": "if (isset($_SERVER['HTTP_X_FORWARDED_PROTO']) && $_SERVER['HTTP_X_FORWARDED_PROTO'] === 'https') { $_SERVER['HTTPS'] = 'on'; }"
+  },
+  "database": {
+    "default": "mariadb",
+    "choices": ["mariadb"],
+    "env": {
+      "mariadb": {
+        "WORDPRESS_DB_HOST": "{db_host}",
+        "WORDPRESS_DB_NAME": "{db_name}",
+        "WORDPRESS_DB_USER": "{db_user}",
+        "WORDPRESS_DB_PASSWORD": "{db_password}"
+      }
+    }
+  },
+  "fields": { "required": [], "specific": [] },
+  "advanced": {},
+  "notes": [
+    "Sprache und Admin-Konto werden beim ersten Aufruf im Browser eingerichtet."
+  ]
+}

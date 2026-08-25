@@ -8,15 +8,21 @@
   "summary": "Werbe- und Tracking-Filter fürs ganze Netz (DNS)",
   "description": "",
   "runtime": "docker",
-  "image": "adguard/adguardhome",
+  "image": "adguard/adguardhome:v0.107.79",
   "container_port": 3000,
   "protocol": "tcp",
   "http": true,
   "default_exposure": "external",
   "data": {
-    "container_path": "/opt/adguardhome",
-    "label": "Konfiguration + Filterlisten"
+    "container_path": "/opt/adguardhome/work",
+    "label": "Arbeitsdaten + Filterlisten"
   },
+  "volumes": [
+    {
+      "host": "/srv/weblab-adguard-home/conf",
+      "container": "/opt/adguardhome/conf"
+    }
+  ],
   "env": {},
   "fixed_ports": [
     { "port": 53, "protocol": "udp" },

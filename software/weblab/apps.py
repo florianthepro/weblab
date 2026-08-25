@@ -325,6 +325,12 @@ def _run_app_container(app, connector):
             env["SSL_DOMAIN"] = hostname
         except Exception:  # noqa: BLE001 - Zertifikat ist optional, niemals Abbruch
             pass
+    # Feste Zusatz-Mounts und Capabilities aus dem Connector (z. B. Docker-Socket
+    # für Portainer, NET_ADMIN für WireGuard).
+    for vol in connector.get("volumes") or []:
+        if vol.get("host") and vol.get("container"):
+            volumes.append((vol["host"], vol["container"]))
+    cap_add = connector.get("cap_add") or []
     egress = store.vpn_egress_get(app.get("egress_id")) if app.get("egress_id") else None
     if egress:
         input_ports = [cp for (_bind, cp, _proto) in ports]
@@ -332,12 +338,12 @@ def _run_app_container(app, connector):
         return dockerctl.run_container(
             slug=app["slug"], image=connector["image"], env=env,
             volumes=volumes, cpu=app["cpu"], ram_mb=app["ram_mb"], hostname=hostname,
-            network_mode=f"container:{gluetun_name}")
+            cap_add=cap_add, network_mode=f"container:{gluetun_name}")
     vpn.egress_down(app["slug"])   # evtl. früheren Ausgang entfernen
     return dockerctl.run_container(
         slug=app["slug"], image=connector["image"], env=env,
         ports=ports, volumes=volumes, cpu=app["cpu"], ram_mb=app["ram_mb"],
-        network=app["network"], hostname=hostname)
+        network=app["network"], hostname=hostname, cap_add=cap_add)
 
 
 def _gen_credential(kind):

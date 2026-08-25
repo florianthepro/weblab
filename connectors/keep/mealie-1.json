@@ -8,7 +8,7 @@
   "summary": "Rezepte sammeln und Essen planen",
   "description": "",
   "runtime": "docker",
-  "image": "ghcr.io/mealie-recipes/mealie:latest",
+  "image": "ghcr.io/mealie-recipes/mealie:v3.24.0",
   "container_port": 9000,
   "protocol": "tcp",
   "http": true,

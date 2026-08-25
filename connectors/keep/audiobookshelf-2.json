@@ -1,0 +1,34 @@
+{
+  "id": "audiobookshelf-2",
+  "group": "audiobookshelf",
+  "name": "Audiobookshelf",
+  "version": "2",
+  "category": "Medien",
+  "icon": "🎧",
+  "summary": "Hörbuch- und Podcast-Server",
+  "description": "",
+  "runtime": "docker",
+  "image": "ghcr.io/advplyr/audiobookshelf:2.36.0",
+  "container_port": 80,
+  "protocol": "tcp",
+  "http": true,
+  "default_exposure": "external",
+  "data": {
+    "container_path": "/data",
+    "label": "Konfiguration + Hörbücher"
+  },
+  "env": {
+    "CONFIG_PATH": "/data/config",
+    "METADATA_PATH": "/data/metadata",
+    "TZ": "Europe/Berlin"
+  },
+  "fields": {
+    "required": [],
+    "specific": []
+  },
+  "notes": [
+    "Hörbücher und Podcasts in Unterordner unter „Dateien“ legen und als Bibliothek einbinden.",
+    "Beim ersten Aufruf wird der Admin-Benutzer angelegt."
+  ],
+  "advanced": {}
+}

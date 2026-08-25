@@ -1,0 +1,45 @@
+{
+  "id": "teamspeak-3",
+  "group": "teamspeak",
+  "name": "TeamSpeak 3",
+  "version": "3",
+  "category": "Server",
+  "icon": "🎙️",
+  "summary": "TeamSpeak-3-Sprachserver",
+  "description": "",
+  "runtime": "docker",
+  "image": "teamspeak:3.13",
+  "http": false,
+  "fixed_ports": [
+    {
+      "port": 9987,
+      "protocol": "udp",
+      "name": "Voice"
+    },
+    {
+      "port": 10011,
+      "protocol": "tcp",
+      "name": "ServerQuery"
+    },
+    {
+      "port": 30033,
+      "protocol": "tcp",
+      "name": "Dateiübertragung"
+    }
+  ],
+  "data": {
+    "container_path": "/var/ts3server",
+    "label": "Serverdaten"
+  },
+  "env": {
+    "TS3SERVER_LICENSE": "accept"
+  },
+  "fields": {
+    "required": [],
+    "specific": []
+  },
+  "advanced": {},
+  "notes": [
+    "Der Privilegienschlüssel (Admin-Token) steht nach dem ersten Start im Container-Log."
+  ]
+}

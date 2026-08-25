@@ -1,0 +1,27 @@
+{
+  "id": "trilium-0.95",
+  "group": "trilium",
+  "name": "Trilium Notes",
+  "version": "0.95",
+  "category": "Wissen",
+  "icon": "🗒️",
+  "summary": "Hierarchische Notizen mit Verknüpfungen",
+  "description": "",
+  "runtime": "docker",
+  "image": "triliumnext/notes:v0.95.0",
+  "container_port": 8080,
+  "protocol": "tcp",
+  "http": true,
+  "default_exposure": "external",
+  "data": {
+    "container_path": "/home/node/trilium-data",
+    "label": "Notizen-Datenbank"
+  },
+  "env": {},
+  "fields": { "required": [], "specific": [] },
+  "advanced": {},
+  "notes": [
+    "Passwort wird beim ersten Aufruf im Browser gesetzt.",
+    "TriliumNext ist der gepflegte Nachfolger des eingestellten zadam/trilium."
+  ]
+}

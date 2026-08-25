@@ -1,0 +1,51 @@
+{
+  "id": "mumble-1.5",
+  "group": "mumble",
+  "name": "Mumble",
+  "version": "1.5",
+  "category": "Server",
+  "icon": "🎧",
+  "summary": "Mumble-Sprachserver (Murmur)",
+  "description": "",
+  "runtime": "docker",
+  "image": "mumblevoip/mumble-server:v1.5",
+  "http": false,
+  "fixed_ports": [
+    {
+      "port": 64738,
+      "protocol": "tcp",
+      "name": "Mumble"
+    },
+    {
+      "port": 64738,
+      "protocol": "udp",
+      "name": "Mumble (Voice)"
+    }
+  ],
+  "data": {
+    "container_path": "/data",
+    "label": "Serverdaten"
+  },
+  "env": {},
+  "fields": {
+    "required": [
+      {
+        "key": "superuser_password",
+        "label": "SuperUser-Passwort",
+        "type": "password",
+        "required": false,
+        "generate": true,
+        "target": {
+          "kind": "env",
+          "name": "MUMBLE_SUPERUSER_PASSWORD"
+        },
+        "auto": "password"
+      }
+    ],
+    "specific": []
+  },
+  "advanced": {},
+  "notes": [
+    "Administration im Client: Anmeldung als „SuperUser“ mit dem generierten Passwort."
+  ]
+}

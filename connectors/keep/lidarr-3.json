@@ -1,0 +1,30 @@
+{
+  "id": "lidarr-3",
+  "group": "lidarr",
+  "name": "Lidarr",
+  "version": "3",
+  "category": "Medien",
+  "icon": "🎵",
+  "summary": "Musik automatisch verwalten und laden",
+  "description": "",
+  "runtime": "docker",
+  "image": "lscr.io/linuxserver/lidarr:3.1.0",
+  "container_port": 8686,
+  "protocol": "tcp",
+  "http": true,
+  "default_exposure": "internal",
+  "data": {
+    "container_path": "/config",
+    "label": "Konfiguration"
+  },
+  "env": {
+    "PUID": "1000",
+    "PGID": "1000",
+    "TZ": "Europe/Berlin"
+  },
+  "notes": [
+    "Beim ersten Start unter Einstellungen → Allgemein die Authentifizierung einrichten."
+  ],
+  "fields": { "required": [], "specific": [] },
+  "advanced": {}
+}

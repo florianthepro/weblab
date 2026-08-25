@@ -8,7 +8,7 @@
   "summary": "Startseite mit Kacheln für deine Dienste",
   "description": "",
   "runtime": "docker",
-  "image": "ghcr.io/gethomepage/homepage:latest",
+  "image": "ghcr.io/gethomepage/homepage:v2.1.2",
   "container_port": 3000,
   "protocol": "tcp",
   "http": true,

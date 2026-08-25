@@ -1,0 +1,48 @@
+{
+  "id": "pihole-6",
+  "group": "pihole",
+  "name": "Pi-hole",
+  "version": "6",
+  "category": "Netzwerk",
+  "icon": "🕳️",
+  "summary": "Werbeblocker fürs ganze Netzwerk (DNS)",
+  "description": "",
+  "runtime": "docker",
+  "image": "pihole/pihole:2026.07.2",
+  "container_port": 80,
+  "protocol": "tcp",
+  "http": true,
+  "default_exposure": "external",
+  "fixed_ports": [
+    { "port": 53, "protocol": "tcp" },
+    { "port": 53, "protocol": "udp" }
+  ],
+  "data": {
+    "container_path": "/etc/pihole",
+    "label": "Konfiguration + Blocklisten"
+  },
+  "env": {
+    "TZ": "Europe/Berlin"
+  },
+  "fields": {
+    "required": [
+      {
+        "key": "web_password",
+        "label": "Admin-Passwort (Weboberfläche)",
+        "type": "password",
+        "required": false,
+        "generate": true,
+        "target": {
+          "kind": "env",
+          "name": "FTLCONF_webserver_api_password"
+        },
+        "auto": "password"
+      }
+    ],
+    "specific": []
+  },
+  "advanced": {},
+  "notes": [
+    "DNS läuft auf Port 53 — muss auf dem Server frei sein (ggf. systemd-resolved anpassen)."
+  ]
+}

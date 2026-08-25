@@ -27,7 +27,8 @@ export DEBIAN_FRONTEND=noninteractive GIT_TERMINAL_PROMPT=0
 for arg in "$@"; do
   case "$arg" in
     --update)    MODE=update ;;
-    --reinstall) MODE=reinstall ;;
+    --refresh)   MODE=refresh ;;
+    --wipe|--reinstall) MODE=reinstall ;;
     --install)   MODE=install ;;
     --yes|-y)    YES=1 ;;
     --dry-run)   DRY=1 ;;
@@ -134,16 +135,9 @@ quellen_holen
 
 if [ -z "$MODE" ]; then
   if weblab_da; then
-    say ""
-    say "weblab ist bereits installiert."
-    say "  1) Aktualisieren     — nur Programmdateien, Apps und Daten bleiben"
-    say "  2) Neu installieren  — alles zurücksetzen, Apps und Daten werden gelöscht"
-    say "  3) Abbrechen"
-    case "$(frage 'Auswahl [1]: ' 1)" in
-      2) MODE=reinstall ;;
-      3) say "Abgebrochen."; exit 0 ;;
-      *) MODE=update ;;
-    esac
+    # Keine Rückfragen: weblab wird frisch installiert, Apps und Daten bleiben.
+    # Ein vollständiger Reset (alles löschen) nur ausdrücklich mit --wipe.
+    MODE=refresh
   else
     gefunden="$(fremde_software)"
     if [ -n "$gefunden" ]; then
@@ -180,6 +174,16 @@ case "$MODE" in
     else
       say "Bereits aktuell — nichts zu tun."
     fi
+    ;;
+  refresh)
+    step "weblab neu installieren (Apps und Daten bleiben)"
+    auf_stand_bringen || true
+    systemctl stop weblab >/dev/null 2>&1 || true
+    rm -rf "$TARGET/weblab" "$TARGET/connectors" "$TARGET/VERSION"
+    kern_installieren
+    say "Neu installiert auf $(git -C "$SRC" rev-parse --short HEAD 2>/dev/null)."
+    say "Apps und Daten unter $DATA sind unverändert."
+    fertig_hinweis
     ;;
   reinstall)
     if [ "$YES" != "1" ] && [ -t 0 ]; then

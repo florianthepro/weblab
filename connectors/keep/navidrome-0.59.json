@@ -1,0 +1,32 @@
+{
+  "id": "navidrome-0.59",
+  "group": "navidrome",
+  "name": "Navidrome",
+  "version": "0.59",
+  "category": "Medien",
+  "icon": "🎵",
+  "summary": "Musik-Streaming, Subsonic-kompatibel",
+  "description": "",
+  "runtime": "docker",
+  "image": "deluan/navidrome:0.59.0",
+  "container_port": 4533,
+  "protocol": "tcp",
+  "http": true,
+  "default_exposure": "external",
+  "data": {
+    "container_path": "/data",
+    "label": "Datenbank + Musik"
+  },
+  "env": {
+    "ND_MUSICFOLDER": "/data/musik"
+  },
+  "fields": {
+    "required": [],
+    "specific": []
+  },
+  "notes": [
+    "Musik in den Unterordner „musik“ unter „Dateien“ legen.",
+    "Beim ersten Aufruf wird der Admin-Benutzer angelegt."
+  ],
+  "advanced": {}
+}

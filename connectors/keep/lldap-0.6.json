@@ -1,0 +1,87 @@
+{
+  "id": "lldap-0.6",
+  "group": "lldap",
+  "name": "LLDAP",
+  "version": "0.6",
+  "category": "Sicherheit",
+  "icon": "📇",
+  "summary": "Leichter LDAP-Server mit Weboberfläche",
+  "description": "",
+  "runtime": "docker",
+  "image": "lldap/lldap:v0.6",
+  "container_port": 17170,
+  "protocol": "tcp",
+  "http": true,
+  "default_exposure": "external",
+  "fixed_ports": [
+    {
+      "port": 3890,
+      "protocol": "tcp",
+      "name": "LDAP"
+    }
+  ],
+  "data": {
+    "container_path": "/data",
+    "label": "Benutzerdatenbank + Schlüssel"
+  },
+  "env": {
+    "LLDAP_HTTP_URL": "https://{domain}"
+  },
+  "fields": {
+    "required": [
+      {
+        "key": "admin_user",
+        "label": "Admin-Benutzer",
+        "type": "string",
+        "default": "admin",
+        "required": false,
+        "target": {
+          "kind": "env",
+          "name": "LLDAP_LDAP_USER_DN"
+        },
+        "auto": "user"
+      },
+      {
+        "key": "admin_password",
+        "label": "Admin-Passwort",
+        "type": "password",
+        "required": false,
+        "generate": true,
+        "target": {
+          "kind": "env",
+          "name": "LLDAP_LDAP_USER_PASS"
+        },
+        "auto": "password"
+      },
+      {
+        "key": "jwt_secret",
+        "label": "JWT-Secret",
+        "type": "password",
+        "required": false,
+        "generate": true,
+        "target": {
+          "kind": "env",
+          "name": "LLDAP_JWT_SECRET"
+        },
+        "auto": "password"
+      },
+      {
+        "key": "base_dn",
+        "label": "LDAP Base-DN",
+        "type": "string",
+        "default": "dc=example,dc=com",
+        "required": true,
+        "help": "Basis der Verzeichnisstruktur, z. B. dc=firma,dc=de.",
+        "target": {
+          "kind": "env",
+          "name": "LLDAP_LDAP_BASE_DN"
+        }
+      }
+    ],
+    "specific": []
+  },
+  "advanced": {},
+  "notes": [
+    "LDAP auf Port 3890 ist unverschlüsselt — nur im internen Netz oder per VPN nutzen."
+  ]
+}

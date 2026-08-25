@@ -53,11 +53,56 @@ def main(root):
             if not name.endswith(".json"):
                 continue
             try:
-                json.load(open(os.path.join(conn, name), encoding="utf-8"))
+                c = json.load(open(os.path.join(conn, name), encoding="utf-8"))
             except ValueError as exc:
                 rc = fail(f"connectors/keep/{name}: ungültiges JSON: {exc}")
+                continue
+            rc = _check_connector(name, c) or rc
     if rc == 0:
         print("Selbsttest ok.")
+    return rc
+
+
+def _check_connector(name, c):
+    """Schema-Prüfung eines Connectors — fängt kaputte Katalog-Einträge vor dem Deploy."""
+    rc = 0
+    problems = []
+    if not c.get("id") or c["id"] != name[:-5]:
+        problems.append("id fehlt oder passt nicht zum Dateinamen")
+    image = c.get("image") or ""
+    if not image:
+        problems.append("image fehlt")
+    elif ":" not in image or image.endswith(":latest"):
+        # Nur Hinweis: gepinnte Tags sind besser, aber ein falsch geratener Pin
+        # wäre schlimmer als latest.
+        print(f"HINWEIS: connectors/keep/{name}: image ohne festen Tag ({image})")
+    if c.get("http"):
+        port = c.get("container_port")
+        if not isinstance(port, int) or not 0 < port < 65536:
+            problems.append(f"http-App ohne gültigen container_port: {port!r}")
+    for p in c.get("fixed_ports") or []:
+        if not isinstance(p.get("port"), int) or p.get("protocol", "tcp") not in ("tcp", "udp"):
+            problems.append(f"fixed_ports-Eintrag ungültig: {p!r}")
+    db = c.get("database")
+    if db:
+        choices = db.get("choices") or []
+        if db.get("default") not in choices:
+            problems.append("database.default fehlt in database.choices")
+        for choice in choices:
+            if not isinstance((db.get("env") or {}).get(choice), dict):
+                problems.append(f"database.env.{choice} fehlt")
+    for sec in ("required", "specific"):
+        for f in (c.get("fields") or {}).get(sec, []):
+            if not f.get("key"):
+                problems.append(f"Feld ohne key in fields.{sec}")
+            if f.get("type") == "password" and not (f.get("auto") or f.get("generate")):
+                problems.append(f"Passwortfeld {f.get('key')} weder auto noch generate "
+                                f"(sichtbare Passwortfelder sind nicht erlaubt)")
+    for vol in c.get("volumes") or []:
+        if not vol.get("host", "").startswith("/") or not vol.get("container", "").startswith("/"):
+            problems.append(f"volumes-Eintrag ungültig: {vol!r}")
+    for prob in problems:
+        rc = fail(f"connectors/keep/{name}: {prob}")
     return rc
 
 
