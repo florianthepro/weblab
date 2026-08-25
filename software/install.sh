@@ -37,6 +37,12 @@ if ! command -v caddy >/dev/null 2>&1; then
   apt-get install -y caddy
 fi
 
+echo "== Selbsttest der neuen Version =="
+if ! python3 "$HERE/selfcheck.py" "$REPO_ROOT"; then
+  echo "FEHLER: Selbsttest fehlgeschlagen — Abbruch, die laufende Version bleibt aktiv."
+  exit 1
+fi
+
 echo "== weblab-Dateien nach $TARGET =="
 install -d "$TARGET" /var/lib/weblab /var/lib/weblab/data
 rm -rf "$TARGET/weblab" "$TARGET/connectors"

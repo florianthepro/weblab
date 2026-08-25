@@ -140,11 +140,37 @@ def render_caddyfile(manage_domain, app_routes, email=None, panel_hosts=None,
     return "\n".join(out) + "\n"
 
 
-def domain_up(domain, server_ip=""):
+# Cloudflares veröffentlichte Proxy-Netze (www.cloudflare.com/ips, seit Jahren stabil).
+# Eine geproxiete Domain löst auf diese IPs auf — das ist KEIN "zeigt woandershin".
+_CF_NETS = None
+
+
+def _cloudflare_ip(addr):
+    global _CF_NETS
+    import ipaddress
+    if _CF_NETS is None:
+        _CF_NETS = [ipaddress.ip_network(n) for n in (
+            "173.245.48.0/20", "103.21.244.0/22", "103.22.200.0/22", "103.31.4.0/22",
+            "141.101.64.0/18", "108.162.192.0/18", "190.93.240.0/20", "188.114.96.0/20",
+            "197.234.240.0/22", "198.41.128.0/17", "162.158.0.0/15", "104.16.0.0/13",
+            "104.24.0.0/14", "172.64.0.0/13", "131.0.72.0/22",
+            "2400:cb00::/32", "2606:4700::/32", "2803:f800::/32", "2405:b500::/32",
+            "2405:8100::/32", "2a06:98c0::/29", "2c0f:f248::/32")]
+    try:
+        ip = ipaddress.ip_address(addr)
+    except ValueError:
+        return False
+    return any(ip in net for net in _CF_NETS)
+
+
+def domain_up(domain, server_ip="", allow_cloudflare=False):
     """True, wenn die Domain (noch) auf DIESEN Server zeigt. Fehlt der Eintrag
     (NXDOMAIN) oder zeigt er woandershin, gilt sie als 'unten' — das Panel bleibt
     dann über die IP erreichbar, damit man sich nicht aussperrt. Ist die eigene IP
-    unbekannt, reicht ein beliebiger Eintrag (kein Fehlalarm)."""
+    unbekannt, reicht ein beliebiger Eintrag (kein Fehlalarm).
+    allow_cloudflare: auch Cloudflare-Proxy-IPs gelten als 'zeigt hierher' — für den
+    Betrieb hinter der orangenen Wolke, NACHDEM das Zertifikat steht. Eine auf einen
+    fremden Server umgezogene Domain fällt weiterhin durch (kein Aussperren)."""
     if not domain:
         return True
     try:
@@ -153,7 +179,11 @@ def domain_up(domain, server_ip=""):
         return False
     if not addrs:
         return False
-    return (server_ip in addrs) if server_ip else True
+    if not server_ip:
+        return True
+    if server_ip in addrs:
+        return True
+    return allow_cloudflare and any(_cloudflare_ip(a) for a in addrs)
 
 
 # --- Let's-Encrypt-Zertifikate von Caddy an Dienste weiterreichen (z. B. Mailserver) ---
@@ -225,13 +255,14 @@ def retry_cert(domain):
     warten. Wir löschen den zwischengespeicherten (leeren) Certificate-Ordner der
     Domain und laden Caddy neu — das erzwingt eine frische Runde.
     Rückgabe: (ok:bool, hinweis:str)."""
-    if not domain:
-        return False, "keine Domain"
+    if not _valid_host(domain) or domain.startswith("*."):
+        return False, "keine gültige Domain"   # schützt auch die glob-Pfade unten
+    safe = glob.escape(domain)   # Domain darf nie als Glob-Muster wirken
     with _caddy_lock:
         # Leere/fehlgeschlagene Zertifikatsordner der Domain entfernen. Ein gültiges
         # (crt+key) bleibt stehen, damit wir nichts Funktionierendes zerstören.
         base = os.path.join(CADDY_STORAGE, "certificates")
-        for issuer_dir in glob.glob(os.path.join(base, "*", domain)):
+        for issuer_dir in glob.glob(os.path.join(base, "*", safe)):
             has_crt = os.path.exists(os.path.join(issuer_dir, f"{domain}.crt"))
             has_key = os.path.exists(os.path.join(issuer_dir, f"{domain}.key"))
             if not (has_crt and has_key):
@@ -240,7 +271,7 @@ def retry_cert(domain):
                 except OSError:
                     pass
         # ACME-Locks entfernen, falls Caddy noch in einem Backoff-Zustand steckt.
-        for lock in glob.glob(os.path.join(CADDY_STORAGE, "locks", f"issue_cert_{domain}*")):
+        for lock in glob.glob(os.path.join(CADDY_STORAGE, "locks", f"issue_cert_{safe}*")):
             try:
                 os.unlink(lock)
             except OSError:
@@ -268,12 +299,29 @@ def write_caddy(manage_domain, app_routes, email=None, panel_hosts=None,
                 return content          # keine Änderung -> kein Neuladen
         except OSError:
             pass
+        # Reste früherer, hart abgebrochener Schreibversuche entfernen (SIGTERM beim
+        # Update kann die finally-Aufräumung überspringen).
+        for stale in glob.glob(os.path.join(os.path.dirname(CADDYFILE), "Caddyfile.new.*.tmp")):
+            try:
+                os.unlink(stale)
+            except OSError:
+                pass
+        # Wichtig: Dateiname MUSS mit "Caddyfile" beginnen UND der Adapter explizit
+        # angegeben werden. Ohne --adapter rät Caddy das Format aus dem Dateinamen —
+        # bei ".Caddyfile.xyz.tmp" (führender Punkt) hielt Caddy die Datei für JSON
+        # und die Validierung schlug IMMER fehl. Folge: die Konfiguration wurde nie
+        # übernommen, Caddy lief dauerhaft mit der Startkonfiguration -> kein HTTPS.
         fd, tmp = tempfile.mkstemp(dir=os.path.dirname(CADDYFILE),
-                                   prefix=".Caddyfile.", suffix=".tmp")
+                                   prefix="Caddyfile.new.", suffix=".tmp")
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as fh:
                 fh.write(content)
-            check = subprocess.run(["caddy", "validate", "--config", tmp],
+            # mkstemp erzeugt 0600 root:root und os.replace übernimmt das — der
+            # Caddy-Dienst läuft aber als Nutzer "caddy" und könnte die Datei dann
+            # nicht lesen (Reload schlägt fehl, Caddy bleibt ohne Konfiguration).
+            os.chmod(tmp, 0o644)
+            check = subprocess.run(["caddy", "validate", "--adapter", "caddyfile",
+                                    "--config", tmp],
                                    capture_output=True, text=True, timeout=60)
             if check.returncode != 0:
                 raise RuntimeError(f"Caddy-Konfiguration ungültig: {check.stderr[-400:]}")

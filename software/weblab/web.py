@@ -106,26 +106,46 @@ def csrf_for(session):
 
 
 # Setup-Ablauf (Hintergrund, damit der Fortschritt abfragbar bleibt)
+def _setup_update(**kw):
+    """Fortschritt im Speicher UND in der Datenbank festhalten — übersteht so einen
+    Dienst-Neustart mitten im Setup (z. B. durch den Auto-Update-Timer): die
+    Statusabfrage erkennt den Abbruch dann statt ewig bei 0 % zu stehen."""
+    SETUP_STATE.update(kw)
+    try:
+        store.set_setting("setup_progress", json.dumps(
+            {k: SETUP_STATE.get(k) for k in
+             ("running", "percent", "step", "done", "error")}))
+    except Exception:  # noqa: BLE001 - Anzeige darf das Setup nie stoppen
+        pass
+
+
 def run_setup(username, password, domain, access="both", cf_email="", cf_key=""):
     def worker():
         try:
-            SETUP_STATE.update({"running": True, "percent": 5, "step": "Benutzer anlegen",
-                                "done": False, "error": None})
-            if store.user_count() == 0:
+            _setup_update(running=True, percent=5, step="Benutzer anlegen",
+                          done=False, error=None)
+            existing = next((u for u in store.list_users()
+                             if u.get("username") == username), None)
+            if existing:
+                # Setup-Wiederholung (nach Abbruch/Fehler): die JETZT eingegebenen
+                # Zugangsdaten gelten — sonst bliebe still das alte Passwort aktiv
+                # und die Anmeldung schlüge unerklärlich fehl.
+                store.set_password(existing["id"], password)
+            else:
                 store.create_user(username, password)
-            SETUP_STATE.update({"percent": 15, "step": "Zugang speichern"})
+            _setup_update(**{"percent": 15, "step": "Zugang speichern"})
             store.set_setting("manage_domain", domain)
             store.set_setting("manage_access", access)
             store.set_setting("domain_ok", "1")
             store.set_setting("https_ready", "0")
 
-            SETUP_STATE.update({"percent": 25, "step": "Server-IP ermitteln"})
+            _setup_update(**{"percent": 25, "step": "Server-IP ermitteln"})
             server_ip = sysinfo.public_ip()
             store.set_setting("server_ip", server_ip)
 
             cf_token = ""
             if cf_email and cf_key:
-                SETUP_STATE.update({"percent": 40, "step": "Cloudflare-Konto verknüpfen"})
+                _setup_update(**{"percent": 40, "step": "Cloudflare-Konto verknüpfen"})
                 cf_token, err = integrations.link_account(cf_email, cf_key, label=domain or "weblab")
                 if cf_token:
                     store.add_cf_account(cf_email or "Cloudflare", cf_token)
@@ -134,7 +154,7 @@ def run_setup(username, password, domain, access="both", cf_email="", cf_key="")
                     store.set_setting("cf_status", f"nicht verknüpft: {err or ''}")
 
             if cf_token and domain:
-                SETUP_STATE.update({"percent": 55, "step": "DNS-Eintrag anlegen"})
+                _setup_update(**{"percent": 55, "step": "DNS-Eintrag anlegen"})
                 ok, err = integrations.Cloudflare(cf_token).set_record(
                     domain, domain, server_ip, "A", proxied=False,
                     comment="weblab Verwaltungsoberfläche")
@@ -143,15 +163,15 @@ def run_setup(username, password, domain, access="both", cf_email="", cf_key="")
             else:
                 store.set_setting("dns_status", "manuell")
 
-            SETUP_STATE.update({"percent": 70, "step": "Reverse-Proxy konfigurieren"})
+            _setup_update(**{"percent": 70, "step": "Reverse-Proxy konfigurieren"})
             ok, err = appsvc.sync_proxy()
             if not ok:
                 store.set_setting("proxy_status", err or "Fehler")
 
-            SETUP_STATE.update({"percent": 85, "step": "Docker prüfen"})
+            _setup_update(**{"percent": 85, "step": "Docker prüfen"})
             store.set_setting("docker_ok", "1" if dockerctl.available() else "0")
 
-            SETUP_STATE.update({"percent": 95, "step": "Zertifikat wird ausgestellt"})
+            _setup_update(**{"percent": 95, "step": "Zertifikat wird ausgestellt"})
             # Bei einem verknüpften Cloudflare-Konto sofort sicherstellen, dass die
             # Verwaltungs-Domain NICHT proxied ist — sonst blockiert die orange Wolke
             # die Let's-Encrypt-Prüfung und wir landen in 521.
@@ -168,11 +188,13 @@ def run_setup(username, password, domain, access="both", cf_email="", cf_key="")
             # dann auf https://domain, wenn Caddy das Zertifikat wirklich hat.
             domain_url = (f"https://{domain}/login"
                           if domain and access in ("domain", "both") else "")
-            SETUP_STATE.update({"percent": 100, "step": "Fertig", "done": True,
+            _setup_update(**{"percent": 100, "step": "Fertig", "done": True,
                                 "running": False, "redirect": "/login",
                                 "domain_url": domain_url})
         except Exception as exc:  # noqa: BLE001 - Fehler dem Nutzer zeigen
-            SETUP_STATE.update({"error": str(exc), "running": False, "step": "Fehler"})
+            # esc: der Text landet auf der Fortschrittsseite per innerHTML — Fehler-
+            # meldungen können Nutzereingaben (z. B. die Domain) enthalten.
+            _setup_update(**{"error": ui.esc(str(exc)), "running": False, "step": "Fehler"})
 
     threading.Thread(target=worker, daemon=True).start()
 
@@ -334,7 +356,31 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/setup/progress":
             return self.page_setup_progress()
         if path == "/api/setup/status":
-            return self._json(SETUP_STATE)
+            state = dict(SETUP_STATE)
+            if not state.get("running") and not state.get("done") and not state.get("error"):
+                # Kein Setup im Speicher: entweder ist es längst fertig (Prozess wurde
+                # neu gestartet) oder es wurde mittendrin abgebrochen. Beides erkennen,
+                # statt die Fortschrittsseite ewig bei 0 % stehen zu lassen.
+                if store.is_setup_done():
+                    state.update({"done": True, "percent": 100, "step": "Fertig",
+                                  "redirect": "/login", "domain_url": ""})
+                else:
+                    try:
+                        saved = json.loads(store.get_setting("setup_progress", "") or "{}")
+                    except ValueError:
+                        saved = {}
+                    if saved.get("error"):
+                        # Der Lauf ist VOR dem Neustart gescheitert: den gespeicherten
+                        # Fehler zeigen statt ewig bei 0 % zu warten.
+                        state.update({"error": saved["error"],
+                                      "percent": saved.get("percent", 0),
+                                      "step": saved.get("step", "Fehler")})
+                    elif saved.get("running"):
+                        state["error"] = ('Die Einrichtung wurde unterbrochen (Dienst neu '
+                                          'gestartet). Bitte <a href="/setup">zurück zur '
+                                          'Einrichtung</a> und erneut starten — schon '
+                                          'Erledigtes wird übersprungen.')
+            return self._json(state)
         if path == "/api/setup/cert":
             # Live-Check für die Fortschrittsseite: steht das Zertifikat für die
             # Verwaltungsdomain schon? (nur die konfigurierte Domain — kein Oracle)
@@ -527,14 +573,14 @@ class Handler(BaseHTTPRequestHandler):
     if(c&&c.ready){step.textContent='Zertifikat da — weiter zur sicheren Domain …';
       location.href=c.url||s.domain_url;return;}
     tries++;
-    if(tries===25){  // ~75s ohne Zertifikat: mögliche Ursachen zeigen (kein Hängen)
-      errEl.innerHTML=’<div class=”msg”>Das Zertifikat kommt noch nicht. Caddy ‘+
-        ‘versucht es automatisch weiter. Die häufigste Ursache ist ein orange ‘+
-        ‘(proxied) Cloudflare-Eintrag — den stellt weblab bei verknüpftem Konto ‘+
-        ‘automatisch auf grau (DNS only). Sonst: Port 80/443 müssen erreichbar ‘+
-        ‘sein und die Domain muss auf diesen Server zeigen. Du kannst auch in ‘+
-        ‘<a href=”/network”>Netzwerk → Zertifikat neu holen</a> klicken.</div>’+
-        ‘<p class=”help”>Solange: ‘+hint+’</p>’;
+    if(tries===25){  // ~75s ohne Zertifikat: moegliche Ursachen zeigen (kein Haengen)
+      errEl.innerHTML='<div class="msg">Das Zertifikat kommt noch nicht. Caddy '+
+        'versucht es automatisch weiter. Die haeufigste Ursache ist ein orange '+
+        '(proxied) Cloudflare-Eintrag - den stellt weblab bei verknuepftem Konto '+
+        'automatisch auf grau (DNS only). Sonst: Port 80/443 muessen erreichbar '+
+        'sein und die Domain muss auf diesen Server zeigen. Du kannst auch unter '+
+        'Netzwerk auf "Zertifikat neu holen" klicken.</div>'+
+        '<p class="help">Solange: '+hint+'</p>';
     }
     setTimeout(waitCert,3000);
    }).catch(function(){setTimeout(waitCert,4000)});
@@ -2176,7 +2222,13 @@ def _domain_watchdog():
                         integrations.retry_cert(domain)   # Wechsel wirkt sofort
                 except Exception:  # noqa: BLE001
                     pass
-            up = integrations.domain_up(domain, store.get_setting("server_ip", ""))
+            # Solange kein Zertifikat da ist, muss die Domain DIREKT auf diesen Server
+            # zeigen (Let's-Encrypt-Prüfung). Sobald das Zertifikat steht, darf sie
+            # zusätzlich über den Cloudflare-Proxy laufen (löst dann auf CF-IPs auf).
+            # Eine auf einen FREMDEN Server umgezogene Domain gilt weiterhin als
+            # 'unten', damit das IP-Failover greift und niemand ausgesperrt wird.
+            up = integrations.domain_up(domain, store.get_setting("server_ip", ""),
+                                        allow_cloudflare=(hr == "1"))
             if up:
                 ups += 1
                 misses = 0

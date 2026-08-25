@@ -6,6 +6,7 @@ import re
 import secrets
 import shlex
 import subprocess
+import threading
 import urllib.request
 
 import catalog
@@ -222,9 +223,20 @@ def _zone_match(zones, hostname):
     return best
 
 
+# Erfassen der Einstellungen + Schreiben der Konfiguration als Einheit: sonst kann
+# ein Aufrufer mit älterem Stand (z. B. ein Request-Thread) NACH dem Watchdog
+# schreiben und dessen frischere Konfiguration still überschreiben.
+_sync_lock = threading.Lock()
+
+
 def sync_proxy():
     """Caddy-Konfiguration aus Manage-Domain, HTTP-Apps mit Domain und den
     App-Verwaltungs-Subdomains neu schreiben."""
+    with _sync_lock:
+        return _sync_proxy_locked()
+
+
+def _sync_proxy_locked():
     manage_domain = store.get_setting("manage_domain", "")
     routes = []
     panel_hosts = []
