@@ -212,5 +212,6 @@
       "ram_mb",
       "cpu"
     ]
-  }
+  },
+  "audience": "homelab"
 }

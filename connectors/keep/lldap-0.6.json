@@ -83,5 +83,6 @@
   "advanced": {},
   "notes": [
     "LDAP auf Port 3890 ist unverschlüsselt — nur im internen Netz oder per VPN nutzen."
-  ]
+  ],
+  "audience": "server"
 }

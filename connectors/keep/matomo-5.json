@@ -1,0 +1,43 @@
+{
+  "id": "matomo-5",
+  "group": "matomo",
+  "name": "Matomo",
+  "version": "5",
+  "category": "Web",
+  "icon": "📊",
+  "summary": "Webanalyse mit voller Datenhoheit (Google-Analytics-Alternative)",
+  "description": "",
+  "runtime": "docker",
+  "image": "matomo:5.13.0-apache",
+  "container_port": 80,
+  "protocol": "tcp",
+  "http": true,
+  "default_exposure": "external",
+  "data": {
+    "container_path": "/var/www/html",
+    "label": "Matomo-Dateien + Konfiguration"
+  },
+  "database": {
+    "default": "mariadb",
+    "choices": [
+      "mariadb"
+    ],
+    "env": {
+      "mariadb": {
+        "MATOMO_DATABASE_HOST": "{db_host}",
+        "MATOMO_DATABASE_DBNAME": "{db_name}",
+        "MATOMO_DATABASE_USERNAME": "{db_user}",
+        "MATOMO_DATABASE_PASSWORD": "{db_password}"
+      }
+    }
+  },
+  "fields": {
+    "required": [],
+    "specific": []
+  },
+  "advanced": {},
+  "notes": [
+    "Admin-Konto wird beim ersten Aufruf im Browser eingerichtet — die Datenbankfelder sind dabei schon ausgefüllt."
+  ],
+  "audience": "server"
+}

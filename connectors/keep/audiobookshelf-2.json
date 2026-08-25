@@ -30,5 +30,6 @@
     "Hörbücher und Podcasts in Unterordner unter „Dateien“ legen und als Bibliothek einbinden.",
     "Beim ersten Aufruf wird der Admin-Benutzer angelegt."
   ],
-  "advanced": {}
+  "advanced": {},
+  "audience": "homelab"
 }

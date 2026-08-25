@@ -107,5 +107,6 @@
       }
     ]
   },
-  "advanced": {}
+  "advanced": {},
+  "audience": "server"
 }

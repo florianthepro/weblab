@@ -25,13 +25,23 @@
   ],
   "env": {},
   "fixed_ports": [
-    { "port": 53, "protocol": "udp" },
-    { "port": 53, "protocol": "tcp" }
+    {
+      "port": 53,
+      "protocol": "udp"
+    },
+    {
+      "port": 53,
+      "protocol": "tcp"
+    }
   ],
   "notes": [
     "Erste Einrichtung über die Weboberfläche; als Admin-Port dort 3000 wählen.",
     "DNS läuft auf Port 53 — muss auf dem Server frei sein (ggf. systemd-resolved anpassen)."
   ],
-  "fields": { "required": [], "specific": [] },
-  "advanced": {}
+  "fields": {
+    "required": [],
+    "specific": []
+  },
+  "advanced": {},
+  "audience": "homelab"
 }

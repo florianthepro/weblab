@@ -40,5 +40,6 @@
   "advanced": {},
   "notes": [
     "Zur Anbindung (z. B. an Nextcloud) die App-Adresse als Dokumentenserver-URL und das JWT-Secret eintragen."
-  ]
+  ],
+  "audience": "server"
 }

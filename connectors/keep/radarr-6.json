@@ -25,6 +25,10 @@
   "notes": [
     "Beim ersten Start unter Einstellungen → Allgemein die Authentifizierung einrichten."
   ],
-  "fields": { "required": [], "specific": [] },
-  "advanced": {}
+  "fields": {
+    "required": [],
+    "specific": []
+  },
+  "advanced": {},
+  "audience": "homelab"
 }

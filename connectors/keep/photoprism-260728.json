@@ -26,7 +26,9 @@
   },
   "database": {
     "default": "mariadb",
-    "choices": ["mariadb"],
+    "choices": [
+      "mariadb"
+    ],
     "env": {
       "mariadb": {
         "PHOTOPRISM_DATABASE_DRIVER": "mysql",
@@ -70,5 +72,6 @@
     "Fotos in den Unterordner „originals“ unter „Dateien“ legen.",
     "Indizierung braucht viel Arbeitsspeicher — mindestens 4 GB empfohlen."
   ],
-  "advanced": {}
+  "advanced": {},
+  "audience": "homelab"
 }

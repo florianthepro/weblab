@@ -1,0 +1,57 @@
+{
+  "id": "hedgedoc-1",
+  "group": "hedgedoc",
+  "name": "HedgeDoc",
+  "version": "1",
+  "category": "Wissen",
+  "icon": "📝",
+  "summary": "Gemeinsames Markdown-Schreiben in Echtzeit",
+  "description": "",
+  "runtime": "docker",
+  "image": "quay.io/hedgedoc/hedgedoc:1.12.0",
+  "container_port": 3000,
+  "protocol": "tcp",
+  "http": true,
+  "default_exposure": "external",
+  "data": {
+    "container_path": "/hedgedoc/public/uploads",
+    "label": "Hochgeladene Bilder"
+  },
+  "env": {
+    "CMD_DOMAIN": "{domain}",
+    "CMD_PROTOCOL_USESSL": "true"
+  },
+  "database": {
+    "default": "mariadb",
+    "choices": [
+      "mariadb"
+    ],
+    "env": {
+      "mariadb": {
+        "CMD_DB_URL": "mysql://{db_user}:{db_password}@{db_host}:3306/{db_name}"
+      }
+    }
+  },
+  "fields": {
+    "required": [
+      {
+        "key": "session_secret",
+        "label": "Sitzungs-Schlüssel",
+        "type": "password",
+        "required": false,
+        "generate": true,
+        "target": {
+          "kind": "env",
+          "name": "CMD_SESSION_SECRET"
+        },
+        "auto": "password"
+      }
+    ],
+    "specific": []
+  },
+  "advanced": {},
+  "notes": [
+    "Das erste Konto wird über „Registrieren“ auf der Startseite angelegt."
+  ],
+  "audience": "server"
+}

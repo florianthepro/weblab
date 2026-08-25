@@ -20,6 +20,10 @@
   "env": {
     "HOMEPAGE_ALLOWED_HOSTS": "*"
   },
-  "fields": { "required": [], "specific": [] },
-  "advanced": {}
+  "fields": {
+    "required": [],
+    "specific": []
+  },
+  "advanced": {},
+  "audience": "homelab"
 }

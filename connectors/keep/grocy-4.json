@@ -1,0 +1,34 @@
+{
+  "id": "grocy-4",
+  "group": "grocy",
+  "name": "Grocy",
+  "version": "4",
+  "category": "Werkzeuge",
+  "icon": "🛒",
+  "summary": "Vorräte, Einkauf und Haushalt organisieren",
+  "description": "",
+  "runtime": "docker",
+  "image": "lscr.io/linuxserver/grocy:4.6.0",
+  "container_port": 80,
+  "protocol": "tcp",
+  "http": true,
+  "default_exposure": "external",
+  "data": {
+    "container_path": "/config",
+    "label": "Konfiguration + Datenbank"
+  },
+  "env": {
+    "PUID": "1000",
+    "PGID": "1000",
+    "TZ": "Europe/Berlin"
+  },
+  "fields": {
+    "required": [],
+    "specific": []
+  },
+  "advanced": {},
+  "notes": [
+    "Standard-Anmeldung: admin / admin — Passwort nach dem ersten Login ändern."
+  ],
+  "audience": "homelab"
+}

@@ -18,6 +18,10 @@
     "label": "Gespeicherte Pastes"
   },
   "env": {},
-  "fields": { "required": [], "specific": [] },
-  "advanced": {}
+  "fields": {
+    "required": [],
+    "specific": []
+  },
+  "advanced": {},
+  "audience": "beide"
 }

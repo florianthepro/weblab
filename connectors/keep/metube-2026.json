@@ -1,0 +1,32 @@
+{
+  "id": "metube-2026",
+  "group": "metube",
+  "name": "MeTube",
+  "version": "2026",
+  "category": "Medien",
+  "icon": "📥",
+  "summary": "Video-Downloads (yt-dlp) bequem im Browser",
+  "description": "",
+  "runtime": "docker",
+  "image": "ghcr.io/alexta69/metube:2026.08.21",
+  "container_port": 8081,
+  "protocol": "tcp",
+  "http": true,
+  "default_exposure": "external",
+  "data": {
+    "container_path": "/downloads",
+    "label": "Downloads"
+  },
+  "data_owner": "1000:1000",
+  "env": {},
+  "fields": {
+    "required": [],
+    "specific": []
+  },
+  "advanced": {},
+  "notes": [
+    "Keine eingebaute Anmeldung — bei externer Erreichbarkeit besser intern lassen oder absichern.",
+    "Läuft standardmäßig als Benutzer 1000:1000 (laut offizieller Doku)."
+  ],
+  "audience": "homelab"
+}

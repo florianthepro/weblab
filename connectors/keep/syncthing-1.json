@@ -26,6 +26,10 @@
     "Weboberfläche über die Domain. Für direkte Geräte-Synchronisation Port 22000 zusätzlich freigeben.",
     "Falls die Oberfläche eine Host-Warnung zeigt: in Syncthing die Host-Prüfung anpassen."
   ],
-  "fields": { "required": [], "specific": [] },
-  "advanced": {}
+  "fields": {
+    "required": [],
+    "specific": []
+  },
+  "advanced": {},
+  "audience": "beide"
 }

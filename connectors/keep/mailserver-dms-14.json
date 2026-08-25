@@ -210,5 +210,6 @@
       "content": "v=DMARC1; p=quarantine; rua=mailto:postmaster@{mail_domain}",
       "comment": "DMARC-Richtlinie"
     }
-  ]
+  ],
+  "audience": "beide"
 }

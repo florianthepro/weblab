@@ -1,0 +1,38 @@
+{
+  "id": "dozzle-8",
+  "group": "dozzle",
+  "name": "Dozzle",
+  "version": "8",
+  "category": "Monitoring",
+  "icon": "📜",
+  "summary": "Live-Logs aller Docker-Container im Browser",
+  "description": "",
+  "runtime": "docker",
+  "image": "amir20/dozzle:v8.14.12",
+  "container_port": 8080,
+  "protocol": "tcp",
+  "http": true,
+  "default_exposure": "internal",
+  "singleton": true,
+  "data": {
+    "container_path": "/data",
+    "label": "Einstellungen"
+  },
+  "env": {},
+  "volumes": [
+    {
+      "host": "/var/run/docker.sock",
+      "container": "/var/run/docker.sock"
+    }
+  ],
+  "fields": {
+    "required": [],
+    "specific": []
+  },
+  "advanced": {},
+  "notes": [
+    "Der Docker-Socket ist eingebunden (ohne read-only, das unterstützt weblab nicht) — das entspricht Root-Zugriff auf den Server. Nur intern erreichbar lassen.",
+    "Keine eingebaute Anmeldung in der Standardkonfiguration."
+  ],
+  "audience": "server"
+}

@@ -1,0 +1,30 @@
+{
+  "id": "actual-budget-26",
+  "group": "actual-budget",
+  "name": "Actual Budget",
+  "version": "26",
+  "category": "Finanzen",
+  "icon": "💰",
+  "summary": "Private Budget- und Finanzverwaltung",
+  "description": "",
+  "runtime": "docker",
+  "image": "actualbudget/actual-server:26.8.1",
+  "container_port": 5006,
+  "protocol": "tcp",
+  "http": true,
+  "default_exposure": "external",
+  "data": {
+    "container_path": "/data",
+    "label": "Budget-Daten"
+  },
+  "env": {},
+  "fields": {
+    "required": [],
+    "specific": []
+  },
+  "advanced": {},
+  "notes": [
+    "Beim ersten Aufruf wird ein Server-Passwort festgelegt."
+  ],
+  "audience": "homelab"
+}

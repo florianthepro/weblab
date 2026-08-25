@@ -1,0 +1,47 @@
+{
+  "id": "librespeed-6",
+  "group": "librespeed",
+  "name": "LibreSpeed",
+  "version": "6",
+  "category": "Netzwerk",
+  "icon": "🚀",
+  "summary": "Speedtest im Browser gegen den eigenen Server",
+  "description": "",
+  "runtime": "docker",
+  "image": "lscr.io/linuxserver/librespeed:v6.2.0-ls285",
+  "container_port": 80,
+  "protocol": "tcp",
+  "http": true,
+  "default_exposure": "external",
+  "data": {
+    "container_path": "/config",
+    "label": "Konfiguration + Ergebnis-Datenbank"
+  },
+  "env": {
+    "PUID": "1000",
+    "PGID": "1000",
+    "TZ": "Europe/Berlin"
+  },
+  "fields": {
+    "required": [
+      {
+        "key": "results_password",
+        "label": "Passwort für Ergebnis-Statistiken",
+        "type": "password",
+        "required": false,
+        "generate": true,
+        "target": {
+          "kind": "env",
+          "name": "PASSWORD"
+        },
+        "auto": "password"
+      }
+    ],
+    "specific": []
+  },
+  "advanced": {},
+  "notes": [
+    "Gespeicherte Testergebnisse sind unter /results/stats.php mit dem erzeugten Passwort einsehbar."
+  ],
+  "audience": "homelab"
+}

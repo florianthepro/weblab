@@ -41,5 +41,6 @@
   "advanced": {},
   "notes": [
     "Der Privilegienschlüssel (Admin-Token) steht nach dem ersten Start im Container-Log."
-  ]
+  ],
+  "audience": "homelab"
 }

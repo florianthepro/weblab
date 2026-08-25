@@ -25,6 +25,10 @@
   "notes": [
     "Ergänzt Radarr und Sonarr — dort zuerst Medien einrichten, dann hier verbinden."
   ],
-  "fields": { "required": [], "specific": [] },
-  "advanced": {}
+  "fields": {
+    "required": [],
+    "specific": []
+  },
+  "advanced": {},
+  "audience": "homelab"
 }

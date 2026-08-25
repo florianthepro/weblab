@@ -47,5 +47,6 @@
   "advanced": {},
   "notes": [
     "Administration im Client: Anmeldung als „SuperUser“ mit dem generierten Passwort."
-  ]
+  ],
+  "audience": "homelab"
 }

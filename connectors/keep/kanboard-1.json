@@ -1,0 +1,30 @@
+{
+  "id": "kanboard-1",
+  "group": "kanboard",
+  "name": "Kanboard",
+  "version": "1",
+  "category": "Werkzeuge",
+  "icon": "📋",
+  "summary": "Aufgaben-Boards nach Kanban-Prinzip",
+  "description": "",
+  "runtime": "docker",
+  "image": "kanboard/kanboard:v1.2.53",
+  "container_port": 80,
+  "protocol": "tcp",
+  "http": true,
+  "default_exposure": "external",
+  "data": {
+    "container_path": "/var/www/app/data",
+    "label": "Datenbank + Anhänge"
+  },
+  "env": {},
+  "fields": {
+    "required": [],
+    "specific": []
+  },
+  "advanced": {},
+  "notes": [
+    "Standard-Anmeldung: admin / admin — Passwort nach dem ersten Login ändern."
+  ],
+  "audience": "server"
+}

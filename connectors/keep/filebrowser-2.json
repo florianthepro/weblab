@@ -27,5 +27,6 @@
   "advanced": {},
   "notes": [
     "Zugangsdaten beim ersten Start im App-Log: Benutzer „admin“, Passwort wird zufällig erzeugt."
-  ]
+  ],
+  "audience": "beide"
 }

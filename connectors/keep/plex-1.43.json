@@ -43,5 +43,6 @@
   "notes": [
     "Medien in einen Unterordner unter „Dateien“ legen und als Bibliothek hinzufügen."
   ],
-  "advanced": {}
+  "advanced": {},
+  "audience": "homelab"
 }

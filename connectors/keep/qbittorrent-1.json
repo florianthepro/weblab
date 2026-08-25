@@ -27,6 +27,10 @@
     "Das erste Anmeldepasswort steht einmalig im Container-Log (Logs der App).",
     "Downloads landen im Datenordner unter downloads/."
   ],
-  "fields": { "required": [], "specific": [] },
-  "advanced": {}
+  "fields": {
+    "required": [],
+    "specific": []
+  },
+  "advanced": {},
+  "audience": "homelab"
 }

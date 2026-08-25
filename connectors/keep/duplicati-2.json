@@ -60,5 +60,6 @@
   "advanced": {},
   "notes": [
     "Die Daten aller weblab-Apps liegen im Container unter /source als Backup-Quelle bereit."
-  ]
+  ],
+  "audience": "homelab"
 }

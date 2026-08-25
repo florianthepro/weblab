@@ -1,0 +1,54 @@
+{
+  "id": "umami-2",
+  "group": "umami",
+  "name": "Umami",
+  "version": "2",
+  "category": "Web",
+  "icon": "📈",
+  "summary": "Schlanke, datenschutzfreundliche Webanalyse ohne Cookies",
+  "description": "",
+  "runtime": "docker",
+  "image": "ghcr.io/umami-software/umami:mysql-v2.20.2",
+  "container_port": 3000,
+  "protocol": "tcp",
+  "http": true,
+  "default_exposure": "external",
+  "env": {
+    "DATABASE_TYPE": "mysql"
+  },
+  "database": {
+    "default": "mariadb",
+    "choices": [
+      "mariadb"
+    ],
+    "env": {
+      "mariadb": {
+        "DATABASE_URL": "mysql://{db_user}:{db_password}@{db_host}:3306/{db_name}"
+      }
+    }
+  },
+  "fields": {
+    "required": [
+      {
+        "key": "app_secret",
+        "label": "App-Geheimnis",
+        "type": "password",
+        "required": false,
+        "generate": true,
+        "target": {
+          "kind": "env",
+          "name": "APP_SECRET"
+        },
+        "auto": "password",
+        "help": "Interner Schlüssel zum Signieren der Anmelde-Tokens — wird automatisch erzeugt."
+      }
+    ],
+    "specific": []
+  },
+  "advanced": {},
+  "notes": [
+    "Erste Anmeldung mit Benutzer „admin“ und Passwort „umami“ — danach in den Einstellungen ändern.",
+    "Alle Daten liegen in der Datenbank, die App selbst speichert nichts lokal."
+  ],
+  "audience": "server"
+}

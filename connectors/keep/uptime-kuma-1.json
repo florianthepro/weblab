@@ -22,5 +22,6 @@
     "required": [],
     "specific": []
   },
-  "advanced": {}
+  "advanced": {},
+  "audience": "server"
 }

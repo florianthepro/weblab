@@ -1,0 +1,66 @@
+{
+  "id": "snipe-it-8",
+  "group": "snipe-it",
+  "name": "Snipe-IT",
+  "version": "8",
+  "category": "Werkzeuge",
+  "icon": "🏷️",
+  "summary": "IT-Inventar und Asset-Verwaltung",
+  "description": "",
+  "runtime": "docker",
+  "image": "lscr.io/linuxserver/snipe-it:8.0.4",
+  "container_port": 80,
+  "protocol": "tcp",
+  "http": true,
+  "default_exposure": "external",
+  "data": {
+    "container_path": "/config",
+    "label": "Konfiguration + Uploads"
+  },
+  "env": {
+    "PUID": "1000",
+    "PGID": "1000",
+    "TZ": "Europe/Berlin",
+    "APP_URL": "https://{domain}"
+  },
+  "database": {
+    "default": "mariadb",
+    "choices": [
+      "mariadb"
+    ],
+    "env": {
+      "mariadb": {
+        "MYSQL_PORT_3306_TCP_ADDR": "{db_host}",
+        "MYSQL_PORT_3306_TCP_PORT": "3306",
+        "MYSQL_DATABASE": "{db_name}",
+        "MYSQL_USER": "{db_user}",
+        "MYSQL_PASSWORD": "{db_password}"
+      }
+    }
+  },
+  "fields": {
+    "required": [
+      {
+        "key": "app_key",
+        "label": "App-Schlüssel",
+        "type": "password",
+        "required": false,
+        "generate": true,
+        "auto": "password",
+        "help": "Interner Verschlüsselungsschlüssel (32 Zeichen) — wird automatisch erzeugt.",
+        "target": {
+          "kind": "env",
+          "name": "APP_KEY",
+          "format": "{value:x<32}"
+        }
+      }
+    ],
+    "specific": []
+  },
+  "advanced": {},
+  "notes": [
+    "Der erste Start richtet die Datenbank ein und kann einige Minuten dauern; danach führt ein Assistent durch die Einrichtung.",
+    "Das linuxserver.io-Image ist als „deprecated“ markiert und erhält keine neuen Versionen mehr — läuft aber stabil; das offizielle Snipe-IT-Image benötigt zusätzlich Redis und passt daher nicht in das Ein-Container-Modell."
+  ],
+  "audience": "server"
+}

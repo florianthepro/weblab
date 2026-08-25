@@ -133,5 +133,6 @@
     "Belegt Port 53 — kollidiert mit anderen DNS-Diensten (z. B. AdGuard Home) auf demselben Server.",
     "Der erste Start provisioniert die Domäne und kann einige Minuten dauern.",
     "Anmeldung an der Domäne als „Administrator“ mit dem generierten Passwort."
-  ]
+  ],
+  "audience": "server"
 }

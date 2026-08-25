@@ -1,0 +1,35 @@
+{
+  "id": "metabase-59",
+  "group": "metabase",
+  "name": "Metabase",
+  "version": "59",
+  "category": "Monitoring",
+  "icon": "🧭",
+  "summary": "Dashboards und Auswertungen aus eigenen Datenquellen",
+  "description": "",
+  "runtime": "docker",
+  "image": "metabase/metabase:v0.59.30",
+  "container_port": 3000,
+  "protocol": "tcp",
+  "http": true,
+  "default_exposure": "external",
+  "data": {
+    "container_path": "/metabase-data",
+    "label": "Metabase-Datenbank (H2)"
+  },
+  "env": {
+    "MB_DB_FILE": "/metabase-data/metabase.db",
+    "MB_SITE_URL": "https://{domain}"
+  },
+  "fields": {
+    "required": [],
+    "specific": []
+  },
+  "advanced": {},
+  "notes": [
+    "Admin-Konto wird beim ersten Aufruf im Browser eingerichtet.",
+    "Nutzt die eingebaute H2-Datenbank — für den Einstieg ausreichend, eigene Datenquellen werden in der App verbunden.",
+    "Der Start dauert beim ersten Mal ein bis zwei Minuten (Java-Anwendung)."
+  ],
+  "audience": "server"
+}

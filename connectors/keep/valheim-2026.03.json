@@ -1,0 +1,104 @@
+{
+  "id": "valheim-2026.03",
+  "group": "valheim",
+  "name": "Valheim",
+  "version": "2026.03",
+  "category": "Spiele",
+  "icon": "🛡️",
+  "summary": "Valheim-Server (Wikinger-Survival) im Koop",
+  "description": "",
+  "runtime": "docker",
+  "image": "lloesche/valheim-server:sha-732221f4d5b5",
+  "http": false,
+  "data": {
+    "container_path": "/config",
+    "label": "Weltdaten + Konfiguration"
+  },
+  "volumes": [
+    {
+      "host": "/srv/weblab-valheim/serverfiles",
+      "container": "/opt/valheim"
+    }
+  ],
+  "env": {},
+  "fixed_ports": [
+    {
+      "port": 2456,
+      "protocol": "udp",
+      "name": "Spiel"
+    },
+    {
+      "port": 2457,
+      "protocol": "udp",
+      "name": "Spiel"
+    },
+    {
+      "port": 2458,
+      "protocol": "udp",
+      "name": "Crossplay"
+    }
+  ],
+  "fields": {
+    "required": [
+      {
+        "key": "server_pass",
+        "label": "Server-Passwort",
+        "type": "password",
+        "required": false,
+        "generate": true,
+        "help": "Mindestens 5 Zeichen, sonst startet der Server nicht.",
+        "target": {
+          "kind": "env",
+          "name": "SERVER_PASS"
+        },
+        "auto": "password"
+      }
+    ],
+    "specific": [
+      {
+        "key": "server_name",
+        "label": "Servername (in der Liste)",
+        "type": "string",
+        "default": "weblab Valheim",
+        "target": {
+          "kind": "env",
+          "name": "SERVER_NAME"
+        }
+      },
+      {
+        "key": "world_name",
+        "label": "Weltname",
+        "type": "string",
+        "default": "Dedicated",
+        "help": "Dateiname der Welt (ohne Endung).",
+        "target": {
+          "kind": "env",
+          "name": "WORLD_NAME"
+        }
+      },
+      {
+        "key": "server_public",
+        "label": "Öffentlich im Serverbrowser listen",
+        "type": "select",
+        "options": [
+          "1",
+          "0"
+        ],
+        "default": "1",
+        "help": "1 = öffentlich gelistet, 0 = nur per IP/Direktverbindung.",
+        "target": {
+          "kind": "env",
+          "name": "SERVER_PUBLIC"
+        }
+      }
+    ]
+  },
+  "advanced": {},
+  "notes": [
+    "Das Image bietet keine Versions-Tags; daher ist ein fester Build-Hash gepinnt (Stand März 2026).",
+    "Die Server-Dateien (~1 GB) liegen in /opt/valheim und werden beim ersten Start heruntergeladen; das eigene Volume erspart den erneuten Download bei Neustarts.",
+    "Port 2458/udp wird nur bei aktiviertem Crossplay benötigt.",
+    "Anmeldung im Spiel mit dem generierten Server-Passwort."
+  ],
+  "audience": "homelab"
+}

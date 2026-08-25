@@ -25,6 +25,10 @@
   "notes": [
     "Verbindet sich mit Radarr/Sonarr/Lidarr und pflegt deren Indexer zentral."
   ],
-  "fields": { "required": [], "specific": [] },
-  "advanced": {}
+  "fields": {
+    "required": [],
+    "specific": []
+  },
+  "advanced": {},
+  "audience": "homelab"
 }

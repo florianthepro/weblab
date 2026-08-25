@@ -25,6 +25,10 @@
     "Beim ersten Aufruf über die Domain ein Besitzer-Konto anlegen.",
     "Für Webhooks in n8n unter Einstellungen die eigene Domain als Webhook-URL eintragen."
   ],
-  "fields": { "required": [], "specific": [] },
-  "advanced": {}
+  "fields": {
+    "required": [],
+    "specific": []
+  },
+  "advanced": {},
+  "audience": "server"
 }

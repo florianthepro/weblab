@@ -995,26 +995,57 @@ class Handler(BaseHTTPRequestHandler):
                           if rows else
                           "<div class='card muted'>Noch nichts installiert.</div>")
 
-        tiles = ""
-        for group in catalog.groups():
-            is_new = any(v["id"] in news for v in group["versions"])
-            tag = ' <span class="badge">neu</span>' if is_new else ""
-            tiles += f"""<div class="appcard">
+        # Katalog: nach Kategorie gruppiert, filterbar nach Suche, Zielgruppe
+        # (Homelab/Server) und Kategorie — bei 70+ Apps sonst unübersichtlich.
+        groups = catalog.groups()
+        aud_label = {"homelab": "Homelab", "server": "Server", "beide": "Homelab · Server"}
+        by_category = {}
+        for group in groups:
+            by_category.setdefault(group["category"], []).append(group)
+
+        sections = ""
+        for category in sorted(by_category):
+            cards = ""
+            for group in sorted(by_category[category], key=lambda g: g["name"].lower()):
+                is_new = any(v["id"] in news for v in group["versions"])
+                tag = ' <span class="badge">neu</span>' if is_new else ""
+                audience = (group["latest"].get("audience") or "beide").lower()
+                cards += f"""<div class="appcard" data-name="{ui.esc(group['name'].lower())}"
+ data-aud="{ui.esc(audience)}">
 <div class="row" style="flex-wrap:nowrap"><span class="ico">{ui.esc(group['icon'])}</span>
 <div style="min-width:0"><div class="nm">{ui.esc(group['name'])}{tag}</div>
-<div class="help" style="margin:1px 0 0">{ui.esc(group['category'])}</div></div></div>
+<div class="aud">{ui.esc(aud_label.get(audience, audience))}</div></div></div>
 <div class="sm">{ui.esc(group['summary'])}</div>
 <a class="btn primary" href="/apps/catalog/{ui.esc(group['group'])}">Installieren</a></div>"""
-        if not tiles:
-            tiles = "<div class='card muted'>Keine Apps gefunden.</div>"
-        count = sum(1 for g in catalog.groups() if any(v["id"] in news for v in g["versions"]))
+            sections += (f'<div class="catsec" data-cat="{ui.esc(category)}">'
+                         f'<h3>{ui.esc(category)}</h3>'
+                         f'<div class="apps">{cards}</div></div>')
+        if not sections:
+            sections = "<div class='card muted'>Keine Apps gefunden.</div>"
+        count = sum(1 for g in groups if any(v["id"] in news for v in g["versions"]))
         news_tag = f' <span class="badge">{count} neu</span>' if count else ""
+        chips = "".join(f'<button type="button" data-cat="{ui.esc(c)}">{ui.esc(c)}</button>'
+                        for c in sorted(by_category))
+        toolbar = f"""<div class="cat-tools" id="catTools">
+ <div class="row1">
+  <input class="cat-search" id="catSearch" type="search" placeholder="App suchen …"
+   autocomplete="off">
+  <div class="seg">
+   <button type="button" class="on" data-aud="">Alle</button>
+   <button type="button" data-aud="homelab">Homelab</button>
+   <button type="button" data-aud="server">Server</button>
+  </div>
+ </div>
+ <div class="catchips">{chips}</div>
+</div>"""
 
         body = f"""<h1>Apps</h1>
 {self._transfer_hint()}
 <h2>Installiert</h2>{installed_html}
-<h2>Katalog{news_tag}</h2>
-<div class="apps">{tiles}</div>"""
+<h2>Katalog · {len(groups)} Apps{news_tag}</h2>
+{toolbar}
+{sections}
+<div class="cat-empty" id="catEmpty">Nichts gefunden — Suche oder Filter anpassen.</div>"""
         self._render("Apps", body, "/apps")
 
     def _suggested_domain(self, group_id):

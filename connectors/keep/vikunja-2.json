@@ -21,9 +21,13 @@
     "VIKUNJA_SERVICE_PUBLICURL": "https://{domain}",
     "VIKUNJA_DATABASE_PATH": "/app/vikunja/files/vikunja.db"
   },
-  "fields": { "required": [], "specific": [] },
+  "fields": {
+    "required": [],
+    "specific": []
+  },
   "advanced": {},
   "notes": [
     "Erstes Konto über „Registrieren“ auf der Startseite anlegen."
-  ]
+  ],
+  "audience": "beide"
 }

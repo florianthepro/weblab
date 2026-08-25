@@ -301,7 +301,18 @@ def _run_app_container(app, connector):
     gluetun-Ausgang (Mullvad/Proton); sonst normal am gewählten Netz."""
     data_dir = host_data_path(app, app["data_path"])
     if connector.get("data"):
+        fresh = not os.path.isdir(data_dir)
         os.makedirs(data_dir, exist_ok=True)
+        # Images, die NICHT als root laufen (z. B. Grafana uid 472), können ein
+        # root-eigenes Datenverzeichnis nicht beschreiben. Connector gibt dann
+        # "data_owner": "uid:gid" an — nur beim Anlegen setzen, nie nachträglich.
+        owner = connector.get("data_owner")
+        if fresh and owner and ":" in str(owner):
+            try:
+                uid, gid = (int(x) for x in str(owner).split(":", 1))
+                os.chown(data_dir, uid, gid)
+            except (ValueError, OSError):
+                pass
     volumes = ([(data_dir, connector.get("data", {}).get("container_path", "/data"))]
                if connector.get("data") else [])
     env = env_for(connector, app["values"], app.get("domain", ""),

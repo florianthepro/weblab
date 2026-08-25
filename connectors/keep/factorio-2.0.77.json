@@ -1,0 +1,44 @@
+{
+  "id": "factorio-2.0.77",
+  "group": "factorio",
+  "name": "Factorio",
+  "version": "2.0.77",
+  "category": "Spiele",
+  "icon": "🏭",
+  "summary": "Factorio-Server (Automatisierung/Aufbau) im Koop",
+  "description": "",
+  "runtime": "docker",
+  "image": "factoriotools/factorio:2.0.77",
+  "http": false,
+  "data": {
+    "container_path": "/factorio",
+    "label": "Speicherstände, Mods, Konfiguration"
+  },
+  "env": {
+    "GENERATE_NEW_SAVE": "true"
+  },
+  "fixed_ports": [
+    {
+      "port": 34197,
+      "protocol": "udp",
+      "name": "Spiel"
+    },
+    {
+      "port": 27015,
+      "protocol": "tcp",
+      "name": "RCON"
+    }
+  ],
+  "fields": {
+    "required": [],
+    "specific": []
+  },
+  "advanced": {},
+  "notes": [
+    "Der Client muss dieselbe Factorio-Version (2.0.77, stabiler Zweig) haben wie der Server.",
+    "Beim ersten Start wird automatisch eine neue Karte erzeugt; danach wird der jeweils neueste Speicherstand geladen.",
+    "Server-Einstellungen (Name, Beschreibung, Sichtbarkeit) stehen in /factorio/config/server-settings.json.",
+    "Das RCON-Passwort wird beim ersten Start zufällig erzeugt und liegt in /factorio/config/rconpw."
+  ],
+  "audience": "homelab"
+}

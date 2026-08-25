@@ -25,7 +25,9 @@
   },
   "database": {
     "default": "mariadb",
-    "choices": ["mariadb"],
+    "choices": [
+      "mariadb"
+    ],
     "env": {
       "mariadb": {
         "DB_HOST": "{db_host}",
@@ -58,5 +60,6 @@
   "advanced": {},
   "notes": [
     "Erste Anmeldung: admin@admin.com / password — danach sofort ändern."
-  ]
+  ],
+  "audience": "server"
 }

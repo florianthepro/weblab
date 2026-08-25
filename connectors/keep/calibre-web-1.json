@@ -26,6 +26,10 @@
     "Erste Anmeldung: admin / admin123 — danach Passwort ändern.",
     "Eine vorhandene Calibre-Bibliothek (metadata.db) im Datenordner auswählen."
   ],
-  "fields": { "required": [], "specific": [] },
-  "advanced": {}
+  "fields": {
+    "required": [],
+    "specific": []
+  },
+  "advanced": {},
+  "audience": "homelab"
 }

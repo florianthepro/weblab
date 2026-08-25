@@ -1,0 +1,59 @@
+{
+  "id": "kimai-2",
+  "group": "kimai",
+  "name": "Kimai",
+  "version": "2",
+  "category": "Werkzeuge",
+  "icon": "⏱️",
+  "summary": "Zeiterfassung für Teams und Freiberufler",
+  "description": "",
+  "runtime": "docker",
+  "image": "kimai/kimai2:apache-2.57.0",
+  "container_port": 8001,
+  "protocol": "tcp",
+  "http": true,
+  "default_exposure": "external",
+  "data": {
+    "container_path": "/opt/kimai/var/data",
+    "label": "Kimai-Daten"
+  },
+  "env": {
+    "ADMINMAIL": "admin@{domain}",
+    "TRUSTED_HOSTS": "localhost|127.0.0.1|{domain}|{server_ip}",
+    "TRUSTED_PROXIES": "172.16.0.0/12"
+  },
+  "database": {
+    "default": "mariadb",
+    "choices": [
+      "mariadb"
+    ],
+    "env": {
+      "mariadb": {
+        "DATABASE_URL": "mysql://{db_user}:{db_password}@{db_host}:3306/{db_name}?charset=utf8mb4&serverVersion=11.4.0-MariaDB"
+      }
+    }
+  },
+  "fields": {
+    "required": [
+      {
+        "key": "admin_password",
+        "label": "Admin-Passwort",
+        "type": "password",
+        "required": false,
+        "generate": true,
+        "target": {
+          "kind": "env",
+          "name": "ADMINPASS"
+        },
+        "auto": "password"
+      }
+    ],
+    "specific": []
+  },
+  "advanced": {},
+  "notes": [
+    "Anmeldung mit „admin@<Ihre Domain>“ und dem erzeugten Passwort.",
+    "Der erste Start legt die Datenbanktabellen an und kann etwas dauern."
+  ],
+  "audience": "server"
+}

@@ -27,5 +27,6 @@
   "notes": [
     "Verbindet sich bei der Einrichtung mit einem vorhandenen Jellyfin- oder Plex-Server."
   ],
-  "advanced": {}
+  "advanced": {},
+  "audience": "homelab"
 }

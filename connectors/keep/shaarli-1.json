@@ -21,6 +21,10 @@
   "notes": [
     "Beim ersten Aufruf über die Domain Benutzername und Passwort festlegen."
   ],
-  "fields": { "required": [], "specific": [] },
-  "advanced": {}
+  "fields": {
+    "required": [],
+    "specific": []
+  },
+  "advanced": {},
+  "audience": "beide"
 }

@@ -1,0 +1,62 @@
+{
+  "id": "satisfactory-1.9.10",
+  "group": "satisfactory",
+  "name": "Satisfactory",
+  "version": "1.9.10",
+  "category": "Spiele",
+  "icon": "🏗️",
+  "summary": "Satisfactory-Server (Fabrikaufbau) im Koop",
+  "description": "",
+  "runtime": "docker",
+  "image": "wolveix/satisfactory-server:v1.9.10",
+  "http": false,
+  "data": {
+    "container_path": "/config",
+    "label": "Speicherstände + Spieldateien"
+  },
+  "data_owner": "1000:1000",
+  "env": {},
+  "fixed_ports": [
+    {
+      "port": 7777,
+      "protocol": "udp",
+      "name": "Spiel"
+    },
+    {
+      "port": 7777,
+      "protocol": "tcp",
+      "name": "Spiel"
+    },
+    {
+      "port": 8888,
+      "protocol": "tcp",
+      "name": "Server-Manager (API)"
+    }
+  ],
+  "fields": {
+    "required": [
+      {
+        "key": "max_players",
+        "label": "Max. Spieler",
+        "type": "number",
+        "default": 4,
+        "min": 1,
+        "max": 16,
+        "required": true,
+        "target": {
+          "kind": "env",
+          "name": "MAXPLAYERS"
+        }
+      }
+    ],
+    "specific": []
+  },
+  "advanced": {},
+  "notes": [
+    "Braucht viel RAM: 8-16 GB empfohlen, unter 8 GB kann der Server abstürzen.",
+    "Beim ersten Start lädt der Server mehrere GB Spieldateien nach /config/gamefiles; das kann einige Minuten dauern.",
+    "Der Server wird nach dem ersten Beitritt im Spiel über den Server-Manager beansprucht und mit einem Admin-Passwort gesichert.",
+    "Port 8888/tcp ist laut Image-Doku zusätzlich zum Spiel-Port 7777 für den Server-Manager erforderlich."
+  ],
+  "audience": "homelab"
+}

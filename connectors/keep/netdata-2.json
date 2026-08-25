@@ -1,0 +1,31 @@
+{
+  "id": "netdata-2",
+  "group": "netdata",
+  "name": "Netdata",
+  "version": "2",
+  "category": "Monitoring",
+  "icon": "📊",
+  "summary": "Echtzeit-Monitoring mit sekundengenauen Metriken",
+  "description": "",
+  "runtime": "docker",
+  "image": "netdata/netdata:v2.11.0",
+  "container_port": 19999,
+  "protocol": "tcp",
+  "http": true,
+  "default_exposure": "internal",
+  "data": {
+    "container_path": "/var/cache/netdata",
+    "label": "Metrik-Datenbank"
+  },
+  "env": {},
+  "fields": {
+    "required": [],
+    "specific": []
+  },
+  "advanced": {},
+  "notes": [
+    "Läuft ohne Host-Mounts (/proc, /sys, Docker-Socket) — Netdata sieht daher nur die eigene Container-Umgebung, nicht alle Prozesse, Datenträger und Container des Servers.",
+    "Dashboard ist ohne Anmeldung erreichbar — deshalb standardmäßig nur intern."
+  ],
+  "audience": "server"
+}

@@ -27,5 +27,6 @@
   "advanced": {},
   "notes": [
     "Geheimer Schlüssel wird beim ersten Start automatisch erzeugt."
-  ]
+  ],
+  "audience": "beide"
 }

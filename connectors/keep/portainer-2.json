@@ -33,5 +33,6 @@
   "notes": [
     "Admin-Konto direkt nach der Installation anlegen — Portainer sperrt die Einrichtung nach wenigen Minuten.",
     "Hat vollen Zugriff auf Docker — nur intern erreichbar lassen."
-  ]
+  ],
+  "audience": "server"
 }

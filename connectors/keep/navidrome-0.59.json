@@ -28,5 +28,6 @@
     "Musik in den Unterordner „musik“ unter „Dateien“ legen.",
     "Beim ersten Aufruf wird der Admin-Benutzer angelegt."
   ],
-  "advanced": {}
+  "advanced": {},
+  "audience": "homelab"
 }

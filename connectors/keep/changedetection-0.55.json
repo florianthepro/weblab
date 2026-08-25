@@ -1,0 +1,33 @@
+{
+  "id": "changedetection-0.55",
+  "group": "changedetection",
+  "name": "changedetection.io",
+  "version": "0.55",
+  "category": "Monitoring",
+  "icon": "👀",
+  "summary": "Überwacht Webseiten auf Änderungen und benachrichtigt",
+  "description": "",
+  "runtime": "docker",
+  "image": "ghcr.io/dgtlmoon/changedetection.io:0.55.8",
+  "container_port": 5000,
+  "protocol": "tcp",
+  "http": true,
+  "default_exposure": "external",
+  "data": {
+    "container_path": "/datastore",
+    "label": "Überwachungsdaten"
+  },
+  "env": {
+    "BASE_URL": "https://{domain}"
+  },
+  "fields": {
+    "required": [],
+    "specific": []
+  },
+  "advanced": {},
+  "notes": [
+    "Nutzt den eingebauten HTTP-Abrufer. JavaScript-lastige Seiten bräuchten einen separaten Chrome-Container (Playwright), den weblab nicht mitstartet.",
+    "Passwortschutz in den Einstellungen aktivieren, wenn die Instanz öffentlich erreichbar ist."
+  ],
+  "audience": "homelab"
+}

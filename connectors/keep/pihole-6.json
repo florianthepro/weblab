@@ -14,8 +14,14 @@
   "http": true,
   "default_exposure": "external",
   "fixed_ports": [
-    { "port": 53, "protocol": "tcp" },
-    { "port": 53, "protocol": "udp" }
+    {
+      "port": 53,
+      "protocol": "tcp"
+    },
+    {
+      "port": 53,
+      "protocol": "udp"
+    }
   ],
   "data": {
     "container_path": "/etc/pihole",
@@ -44,5 +50,6 @@
   "advanced": {},
   "notes": [
     "DNS läuft auf Port 53 — muss auf dem Server frei sein (ggf. systemd-resolved anpassen)."
-  ]
+  ],
+  "audience": "homelab"
 }

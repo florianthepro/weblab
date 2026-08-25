@@ -25,7 +25,10 @@
   },
   "database": {
     "default": "mariadb",
-    "choices": ["mariadb", "sqlite"],
+    "choices": [
+      "mariadb",
+      "sqlite"
+    ],
     "env": {
       "mariadb": {
         "MYSQL_HOST": "{db_host}",
@@ -67,5 +70,6 @@
     ],
     "specific": []
   },
-  "advanced": {}
+  "advanced": {},
+  "audience": "beide"
 }

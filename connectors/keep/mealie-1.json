@@ -24,6 +24,10 @@
   "notes": [
     "Erste Anmeldung: changeme@example.com / MyPassword — danach sofort ändern."
   ],
-  "fields": { "required": [], "specific": [] },
-  "advanced": {}
+  "fields": {
+    "required": [],
+    "specific": []
+  },
+  "advanced": {},
+  "audience": "homelab"
 }

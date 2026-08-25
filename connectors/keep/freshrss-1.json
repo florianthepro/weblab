@@ -26,5 +26,6 @@
     "required": [],
     "specific": []
   },
-  "advanced": {}
+  "advanced": {},
+  "audience": "homelab"
 }

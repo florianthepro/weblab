@@ -15,7 +15,9 @@
   "default_exposure": "external",
   "database": {
     "default": "mariadb",
-    "choices": ["mariadb"],
+    "choices": [
+      "mariadb"
+    ],
     "env": {
       "mariadb": {
         "DB_TYPE": "mariadb",
@@ -27,10 +29,14 @@
       }
     }
   },
-  "fields": { "required": [], "specific": [] },
+  "fields": {
+    "required": [],
+    "specific": []
+  },
   "advanced": {},
   "notes": [
     "Admin-Konto wird beim ersten Aufruf im Browser angelegt.",
     "Alle Inhalte liegen in der Datenbank."
-  ]
+  ],
+  "audience": "server"
 }

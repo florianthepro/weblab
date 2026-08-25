@@ -22,7 +22,9 @@
   },
   "database": {
     "default": "mariadb",
-    "choices": ["mariadb"],
+    "choices": [
+      "mariadb"
+    ],
     "env": {
       "mariadb": {
         "WORDPRESS_DB_HOST": "{db_host}",
@@ -32,9 +34,13 @@
       }
     }
   },
-  "fields": { "required": [], "specific": [] },
+  "fields": {
+    "required": [],
+    "specific": []
+  },
   "advanced": {},
   "notes": [
     "Sprache und Admin-Konto werden beim ersten Aufruf im Browser eingerichtet."
-  ]
+  ],
+  "audience": "server"
 }

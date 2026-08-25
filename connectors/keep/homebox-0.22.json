@@ -1,0 +1,46 @@
+{
+  "id": "homebox-0.22",
+  "group": "homebox",
+  "name": "Homebox",
+  "version": "0.22",
+  "category": "Werkzeuge",
+  "icon": "📦",
+  "summary": "Inventar für Haushalt und Werkstatt",
+  "description": "",
+  "runtime": "docker",
+  "image": "ghcr.io/sysadminsmedia/homebox:0.22.3",
+  "container_port": 7745,
+  "protocol": "tcp",
+  "http": true,
+  "default_exposure": "external",
+  "data": {
+    "container_path": "/data",
+    "label": "Inventar-Datenbank + Bilder"
+  },
+  "env": {
+    "TZ": "Europe/Berlin"
+  },
+  "fields": {
+    "required": [
+      {
+        "key": "api_pepper",
+        "label": "API-Schlüssel-Pepper",
+        "type": "password",
+        "required": false,
+        "generate": true,
+        "auto": "password",
+        "help": "Interner Zufallswert zum Absichern von API-Schlüsseln — wird automatisch erzeugt.",
+        "target": {
+          "kind": "env",
+          "name": "HBOX_AUTH_API_KEY_PEPPER"
+        }
+      }
+    ],
+    "specific": []
+  },
+  "advanced": {},
+  "notes": [
+    "Beim ersten Aufruf über „Registrieren“ ein Konto anlegen — danach anmelden."
+  ],
+  "audience": "homelab"
+}

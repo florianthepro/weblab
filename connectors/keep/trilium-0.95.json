@@ -18,10 +18,14 @@
     "label": "Notizen-Datenbank"
   },
   "env": {},
-  "fields": { "required": [], "specific": [] },
+  "fields": {
+    "required": [],
+    "specific": []
+  },
   "advanced": {},
   "notes": [
     "Passwort wird beim ersten Aufruf im Browser gesetzt.",
     "TriliumNext ist der gepflegte Nachfolger des eingestellten zadam/trilium."
-  ]
+  ],
+  "audience": "beide"
 }
