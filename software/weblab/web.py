@@ -152,6 +152,14 @@ def run_setup(username, password, domain, access="both", cf_email="", cf_key="")
             store.set_setting("docker_ok", "1" if dockerctl.available() else "0")
 
             SETUP_STATE.update({"percent": 95, "step": "Zertifikat wird ausgestellt"})
+            # Bei einem verknüpften Cloudflare-Konto sofort sicherstellen, dass die
+            # Verwaltungs-Domain NICHT proxied ist — sonst blockiert die orange Wolke
+            # die Let's-Encrypt-Prüfung und wir landen in 521.
+            if domain and access in ("domain", "both"):
+                try:
+                    integrations.ensure_unproxied(store.cf_accounts(), domain, server_ip)
+                except Exception:  # noqa: BLE001
+                    pass
             time.sleep(3)
             store.set_setting("setup_done", "1")
             # Immer funktionierender Weg zur Anmeldung: relativer Pfad bleibt auf dem
@@ -520,12 +528,13 @@ class Handler(BaseHTTPRequestHandler):
       location.href=c.url||s.domain_url;return;}
     tries++;
     if(tries===25){  // ~75s ohne Zertifikat: mögliche Ursachen zeigen (kein Hängen)
-      errEl.innerHTML='<div class="msg">Das Zertifikat kommt noch nicht. Caddy '+
-        'versucht es automatisch weiter. Häufige Ursachen: die Domain muss direkt '+
-        'auf diesen Server zeigen (bei Cloudflare graue Wolke / „DNS only“, nicht '+
-        'proxied), Port 80 und 443 müssen erreichbar sein, oder Let’s Encrypt '+
-        'bremst nach mehreren Fehlversuchen kurz (löst sich von selbst innerhalb '+
-        'einer Stunde).</div><p class="help">Solange: '+hint+'</p>';
+      errEl.innerHTML=’<div class=”msg”>Das Zertifikat kommt noch nicht. Caddy ‘+
+        ‘versucht es automatisch weiter. Die häufigste Ursache ist ein orange ‘+
+        ‘(proxied) Cloudflare-Eintrag — den stellt weblab bei verknüpftem Konto ‘+
+        ‘automatisch auf grau (DNS only). Sonst: Port 80/443 müssen erreichbar ‘+
+        ‘sein und die Domain muss auf diesen Server zeigen. Du kannst auch in ‘+
+        ‘<a href=”/network”>Netzwerk → Zertifikat neu holen</a> klicken.</div>’+
+        ‘<p class=”help”>Solange: ‘+hint+’</p>’;
     }
     setTimeout(waitCert,3000);
    }).catch(function(){setTimeout(waitCert,4000)});
@@ -1445,6 +1454,29 @@ Adresse hier eintragen (der Schlüssel wird nur für diesen Ausgang gespeichert)
 <button class="btn primary" type="submit">Hinzufügen</button></form>"""
         return ui.modal("vpnDialog", "VPN-Ausgang hinzufügen", inner)
 
+    def _cert_status_block(self):
+        """Zeigt für die Verwaltungs-Domain den HTTPS-Status und einen Knopf, mit dem
+        man das Zertifikat sofort neu holt (räumt DNS-Proxy weg, weckt Caddy).
+        Erklärt in einem Satz, warum die graue Wolke bei Cloudflare wichtig ist."""
+        dom = store.get_setting("manage_domain", "")
+        if not dom:
+            return ""
+        ready = integrations.https_ready(dom)
+        pill = ('<span class="pill run">HTTPS aktiv</span>' if ready
+                else '<span class="pill">HTTPS noch nicht da</span>')
+        hint = ("" if ready else
+                '<p class="help">Für Let’s Encrypt muss der DNS-Eintrag auf DIESEN Server '
+                'zeigen und bei Cloudflare <b>grau</b> („DNS only") sein — der orange '
+                'Proxy blockiert die Zertifikat-Prüfung. „Neu holen" stellt das um und '
+                'startet Caddy neu.</p>')
+        btn = (f'<form method="post" action="/network" style="margin-top:10px">'
+               f'{ui.csrf_input(self.csrf)}'
+               f'<input type="hidden" name="action" value="cert_retry">'
+               f'<button class="btn" type="submit">Zertifikat neu holen</button></form>')
+        return (f'<div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--line)">'
+                f'<div class="row" style="align-items:center;gap:10px">'
+                f'<b>Zertifikat für {ui.esc(dom)}</b>{pill}</div>{hint}{btn}</div>')
+
     def _managed_hosts(self):
         hosts = set()
         md = store.get_setting("manage_domain", "")
@@ -1597,7 +1629,8 @@ Adresse hier eintragen (der Schlüssel wird nur für diesen Ausgang gespeichert)
  <input id="server_ip" name="server_ip" value="{ui.esc(store.get_setting('server_ip',''))}"></div>
 <div class="field" style="flex:1;min-width:150px;margin:0"><label for="manage_access">Zugang</label>
  <select id="manage_access" name="manage_access">{access_opts}</select></div>
-<button class="btn" type="submit" style="margin-top:22px">Speichern</button></form></div>
+<button class="btn" type="submit" style="margin-top:22px">Speichern</button></form>
+{self._cert_status_block()}</div>
 <h2>DNS</h2>
 <div class="card">{self._cloudflare_block()}</div>
 {self._orphan_dns_html()}
@@ -1643,6 +1676,27 @@ Adresse hier eintragen (der Schlüssel wird nur für diesen Ausgang gespeichert)
                 return self._redirect("/network", ("ok", f"{deleted} verwaiste Einträge gelöscht."))
             if action == "cf_oauth":
                 return self._cf_oauth_start(form)
+            if action == "cert_retry":
+                # Manueller „Zertifikat neu holen"-Knopf: DNS auf grau setzen (falls
+                # eine CF-Zone das erlaubt), leere/verwaiste Cert-Ordner räumen und
+                # Caddy neu laden — sofortiger neuer ACME-Versuch, kein Warten aufs
+                # Backoff-Fenster.
+                dom = store.get_setting("manage_domain", "")
+                if not dom:
+                    return self._redirect("/network", ("err", "Keine Domain gesetzt."))
+                notes = []
+                changed, info = integrations.ensure_unproxied(
+                    store.cf_accounts(), dom, store.get_setting("server_ip", ""))
+                if changed:
+                    notes.append("DNS auf DNS-only (grau) gestellt")
+                elif info:
+                    notes.append(f"DNS: {info}")
+                ok, err = integrations.retry_cert(dom)
+                if not ok:
+                    return self._redirect("/network", ("err", f"Neuversuch: {err}"))
+                store.set_setting("https_ready", "0")   # Watchdog erkennt den Wechsel
+                notes.append("Caddy neu geladen — Zertifikat wird jetzt geholt (30–60 s).")
+                return self._redirect("/network", ("ok", " · ".join(notes)))
             if action == "general":
                 store.set_setting("manage_domain",
                                   (form.get("manage_domain") or "").strip().lower().lstrip("@."))
@@ -2110,6 +2164,18 @@ def _domain_watchdog():
             if hr != store.get_setting("https_ready", "0"):
                 store.set_setting("https_ready", hr)
                 appsvc.sync_proxy()
+            # Solange noch kein Zertifikat vorliegt: bei einem verknüpften Cloudflare-
+            # Konto still die Verwaltungs-Domain auf DNS-only (graue Wolke) stellen.
+            # Sonst blockiert der CF-Proxy die Let's-Encrypt-Prüfung dauerhaft (521 /
+            # „nicht sicher"). Bei ok/False (nichts zu tun) fällt das nicht auf.
+            if hr == "0":
+                try:
+                    changed, _ = integrations.ensure_unproxied(
+                        store.cf_accounts(), domain, store.get_setting("server_ip", ""))
+                    if changed:
+                        integrations.retry_cert(domain)   # Wechsel wirkt sofort
+                except Exception:  # noqa: BLE001
+                    pass
             up = integrations.domain_up(domain, store.get_setting("server_ip", ""))
             if up:
                 ups += 1

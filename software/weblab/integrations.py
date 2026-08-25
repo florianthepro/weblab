@@ -219,6 +219,42 @@ def export_cert(domain):
 _caddy_lock = threading.Lock()
 
 
+def retry_cert(domain):
+    """Caddy dazu bringen, das ACME-Verfahren für die Domain sofort neu zu starten.
+    Ohne diese Hilfe kann Caddy nach mehreren Fehlversuchen bis zu einer Stunde
+    warten. Wir löschen den zwischengespeicherten (leeren) Certificate-Ordner der
+    Domain und laden Caddy neu — das erzwingt eine frische Runde.
+    Rückgabe: (ok:bool, hinweis:str)."""
+    if not domain:
+        return False, "keine Domain"
+    with _caddy_lock:
+        # Leere/fehlgeschlagene Zertifikatsordner der Domain entfernen. Ein gültiges
+        # (crt+key) bleibt stehen, damit wir nichts Funktionierendes zerstören.
+        base = os.path.join(CADDY_STORAGE, "certificates")
+        for issuer_dir in glob.glob(os.path.join(base, "*", domain)):
+            has_crt = os.path.exists(os.path.join(issuer_dir, f"{domain}.crt"))
+            has_key = os.path.exists(os.path.join(issuer_dir, f"{domain}.key"))
+            if not (has_crt and has_key):
+                try:
+                    shutil.rmtree(issuer_dir)
+                except OSError:
+                    pass
+        # ACME-Locks entfernen, falls Caddy noch in einem Backoff-Zustand steckt.
+        for lock in glob.glob(os.path.join(CADDY_STORAGE, "locks", f"issue_cert_{domain}*")):
+            try:
+                os.unlink(lock)
+            except OSError:
+                pass
+        r = subprocess.run(["systemctl", "reload", "caddy"], capture_output=True,
+                           text=True, timeout=60)
+        if r.returncode != 0:
+            r = subprocess.run(["systemctl", "restart", "caddy"], capture_output=True,
+                               text=True, timeout=90)
+        if r.returncode != 0:
+            return False, (r.stderr or r.stdout or "caddy reload/restart fehlgeschlagen")[-300:]
+    return True, ""
+
+
 def write_caddy(manage_domain, app_routes, email=None, panel_hosts=None,
                 access="both", domain_ok=True, cert_hosts=None, https_ready=False):
     content = render_caddyfile(manage_domain, app_routes, email, panel_hosts,
@@ -609,6 +645,47 @@ def resolve_zone(accounts, hostname, cache=None):
                 return {"name": cand, "id": cache[key], "token": token,
                         "account": acc.get("label", "")}
     return None
+
+
+def ensure_unproxied(accounts, hostname, server_ip=""):
+    """Stellt sicher, dass der A-Record von hostname bei Cloudflare NICHT proxied
+    (graue Wolke) ist und auf server_ip zeigt. Ohne dies scheitert Let's Encrypt
+    (der Cloudflare-Proxy fängt TLS-ALPN ab, und im 'Full (strict)'-Modus zeigt CF
+    einen 521-Fehler, solange das Origin-Zertifikat fehlt).
+    Rückgabe: (geändert:bool, hinweis:str). geändert=True wenn der Record umgestellt
+    wurde. hinweis ist entweder leer, ein Fehlermeldung, oder eine erklärende Info."""
+    if not hostname:
+        return False, ""
+    zone = resolve_zone(accounts or [], hostname)
+    if not zone:
+        return False, ""      # keine Zone bei einem verknüpften Konto — nichts zu tun
+    cf = Cloudflare(zone["token"])
+    recs, err = cf.list_records(zone["name"])
+    if err:
+        return False, err
+    hostname = hostname.lower()
+    target = None
+    for r in recs or []:
+        if r.get("type") == "A" and (r.get("name") or "").lower() == hostname:
+            target = r
+            break
+    # Kein passender A-Record → anlegen (dann garantiert unproxied und mit richtiger IP).
+    if not target:
+        if not server_ip:
+            return False, "kein A-Record, IP unbekannt"
+        ok, err = cf.set_record(hostname, hostname, server_ip, "A", proxied=False,
+                                comment="weblab Verwaltungsoberfläche")
+        invalidate_dns_cache()
+        return (ok, "" if ok else (err or "Fehler"))
+    wrong_ip = server_ip and target.get("content") != server_ip
+    is_proxied = bool(target.get("proxied"))
+    if not is_proxied and not wrong_ip:
+        return False, ""      # alles gut
+    ok, err = cf.set_record(hostname, hostname, server_ip or target.get("content"),
+                            "A", proxied=False,
+                            comment="weblab Verwaltungsoberfläche (auto: unproxied für Zertifikat)")
+    invalidate_dns_cache()
+    return (ok, "" if ok else (err or "Fehler"))
 
 
 def token_for_host(accounts, hostname):
