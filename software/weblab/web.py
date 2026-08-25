@@ -888,6 +888,19 @@ class Handler(BaseHTTPRequestHandler):
             ui.field_input(f, f.get("default", "")) for f in connector["fields"].get("required", [])
             if not f.get("auto"))          # Zugangsdaten werden automatisch erzeugt
 
+        # App-eigene Datenbank: nur die Art wählen — Einrichtung, Zugangsdaten und
+        # Betrieb laufen komplett im Hintergrund (keine Passwörter im Interface).
+        db_field = ""
+        spec = appsvc.db_spec(connector)
+        if spec:
+            choices = spec.get("choices") or ["mariadb"]
+            default_db = spec.get("default", choices[0])
+            opts = "".join(
+                f'<option value="{ui.esc(c)}"{" selected" if c == default_db else ""}>'
+                f'{ui.esc(appsvc.DB_LABELS.get(c, c))}</option>' for c in choices)
+            db_field = (f'<div class="field"><label for="database">Datenbank</label>'
+                        f'<select id="database" name="database">{opts}</select></div>')
+
         locations = sysinfo.data_locations()
         loc_options = "".join(
             f'<option value="{ui.esc(l["path"])}">{ui.esc(l["mount"])} · '
@@ -919,6 +932,7 @@ class Handler(BaseHTTPRequestHandler):
    <select id="connector_id" name="connector_id"
     onchange="location.href='/apps/catalog/{ui.esc(group_id)}?version='+this.value">{version_options}</select>
 </div>
+  {db_field}
   {required_html}
  </div>
  <div class="card"><h3>Basis</h3>
@@ -1349,11 +1363,11 @@ class Handler(BaseHTTPRequestHandler):
             return self._redirect(f"/apps/{app_id}", ("err", "Dafuer fehlt die Berechtigung."))
         try:
             if action == "start":
-                dockerctl.start(app["slug"])
+                appsvc.start_app(app, connector)     # inkl. App-eigener Datenbank
             elif action == "stop":
-                dockerctl.stop(app["slug"])
+                appsvc.stop_app(app)
             elif action == "restart":
-                dockerctl.restart(app["slug"])
+                appsvc.restart_app(app, connector)
             elif action == "delete":
                 appsvc.remove(app_id, delete_data=form.get("delete_data") == "1",
                               delete_dns=form.get("delete_dns") == "1")
@@ -1567,39 +1581,6 @@ Adresse hier eintragen (der Schlüssel wird nur für diesen Ausgang gespeichert)
             f"nicht dabei.</p><div class='tbl-wrap'><table><tr><th>Name</th><th>Ziel</th><th></th></tr>"
             f"{rows}</table></div>{allbtn}</div>")
 
-    def _dns_records_html(self):
-        accounts = store.cf_accounts()
-        server_ip = store.get_setting("server_ip", "")
-        zones = integrations.all_zones(accounts) if accounts else []
-        if not zones:
-            return ""
-        sections = ""
-        for zone in zones:
-            rows = integrations.cached_records(zone["token"], zone["name"]); error = None
-            rr = ""
-            for record in rows:
-                mark = (" <span class='pill run'>dieser Server</span>"
-                        if record.get("content") == server_ip else "")
-                rr += (f"<tr><td class='mono'>{ui.esc(record.get('type'))}</td>"
-                       f"<td class='mono'>{ui.esc(record.get('name'))}</td>"
-                       f"<td class='mono'>{ui.esc(record.get('content'))}{mark}</td>"
-                       f"<td>{'Proxy' if record.get('proxied') else 'DNS only'}</td>"
-                       f"<td><form method='post' action='/network' style='display:inline'>"
-                       f"{ui.csrf_input(self.csrf)}<input type='hidden' name='action' value='dns_delete'>"
-                       f"<input type='hidden' name='zone' value=\"{ui.esc(zone['name'])}\">"
-                       f"<input type='hidden' name='record_id' value=\"{ui.esc(record.get('id'))}\">"
-                       f"<button class='btn sm danger' type='submit'"
-                       f" onclick=\"return confirm('Eintrag löschen?')\">Löschen</button></form></td></tr>")
-            if not rr:
-                rr = f"<tr><td colspan='5' class='muted'>{ui.esc(error or 'Keine Einträge.')}</td></tr>"
-            label = f" <span class='muted'>· {ui.esc(zone['account'])}</span>" if zone.get("account") else ""
-            sections += (f"<h3 style='margin-top:18px'><span class='mono'>{ui.esc(zone['name'])}</span>{label}</h3>"
-                         f"<div class='tbl-wrap'><table>"
-                         f"<tr><th>Typ</th><th>Name</th><th>Ziel</th><th>Modus</th><th></th></tr>"
-                         f"{rr}</table></div>")
-        return (sections
-                + "<p class='help'>Einträge je App (A, MX, SPF …) werden automatisch angelegt.</p>")
-
     def page_network(self):
         app_by_port = {a["host_port"]: a for a in store.list_apps()}
         ports = sysinfo.listening_ports()
@@ -1680,7 +1661,6 @@ Adresse hier eintragen (der Schlüssel wird nur für diesen Ausgang gespeichert)
 <h2>DNS</h2>
 <div class="card">{self._cloudflare_block()}</div>
 {self._orphan_dns_html()}
-{ui.section("DNS-Einträge", self._dns_records_html() or "<p class='muted'>Kein Konto verbunden.</p>")}
 {ui.section("VPN", self._vpn_block())}
 {ui.section("Offene Ports", ext + ui.section("Intern", internal))}
 {ui.section("Erweitert", iface_html + ui.section("Subnetze", subnet_html))}"""

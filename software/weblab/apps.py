@@ -27,7 +27,8 @@ def slugify(name):
 def unique_slug(name):
     base = slugify(name)
     slug, index = base, 2
-    while store.get_app_by_slug(slug):
+    # "-db" ist für die App-eigenen Datenbank-Container reserviert (kein Zusammenstoß).
+    while store.get_app_by_slug(slug) or slug.endswith("-db"):
         slug = f"{base}-{index}"
         index += 1
     return slug
@@ -305,6 +306,8 @@ def _run_app_container(app, connector):
     env = env_for(connector, app["values"], app.get("domain", ""),
                   store.get_setting("server_ip", "") or sysinfo.public_ip(),
                   app.get("manage_host", ""))
+    ensure_db(app, connector)                   # DB zuerst: erzeugt/persistiert auch
+    env.update(_db_env_for_app(connector, app))  # fehlende Zugangsdaten -> dann Env
     env.update(app.get("import_env") or {})     # z. B. LEVEL fuer eine uebernommene Welt
     ports = port_binding(app["exposure"], app["host_port"], app["container_port"],
                          connector.get("protocol", "tcp"), connector)
@@ -343,6 +346,173 @@ def _gen_credential(kind):
     return secrets.token_urlsafe(15)
 
 
+# ---------- Per-App-Datenbank (autonom, ohne Felder im Interface) ----------
+# Jede App, deren Connector einen "database"-Block hat, bekommt auf Wunsch ihre
+# eigene MariaDB: eigener Container ohne veröffentlichte Ports, privates Netz nur
+# für App+DB, generierte Zugangsdaten. Nichts davon taucht im Interface auf.
+DB_IMAGE = "mariadb:11.4"          # LTS — stabilste gepflegte Serie
+DB_RAM_MB = 512
+DB_LABELS = {"mariadb": "MariaDB (empfohlen)", "sqlite": "SQLite (einfach)"}
+
+
+def db_spec(connector):
+    return (connector or {}).get("database") or None
+
+
+def db_choice(connector, values):
+    """Gewählte Datenbank-Art dieser App — None, wenn der Connector keine nutzt ODER
+    die App vor dieser Funktion installiert wurde (kein 'database'-Wert): einer
+    laufenden Alt-App wird nie nachträglich eine ungenutzte Datenbank untergeschoben."""
+    spec = db_spec(connector)
+    if not spec:
+        return None
+    choice = (values or {}).get("database")
+    if not choice:
+        return None
+    return choice if choice in (spec.get("choices") or [choice]) \
+        else spec.get("default", "mariadb")
+
+
+def _db_name(slug):
+    return re.sub(r"[^a-z0-9_]", "_", (slug or "app").replace("-", "_")) or "app"
+
+
+def prepare_db_values(connector, values, slug, requested=None):
+    """Beim Installieren: Auswahl übernehmen und (unsichtbare) Zugangsdaten erzeugen."""
+    spec = db_spec(connector)
+    if not spec:
+        return
+    choice = requested or spec.get("default") or "mariadb"
+    if choice not in (spec.get("choices") or [choice]):
+        choice = spec.get("default", "mariadb")
+    values["database"] = choice
+    values.setdefault("db_name", _db_name(slug))
+    if choice == "mariadb":
+        values.setdefault("db_user", values["db_name"])
+        values.setdefault("db_password", secrets.token_urlsafe(18))
+        values.setdefault("db_root_password", secrets.token_urlsafe(18))
+
+
+def app_network(app_or_slug):
+    slug = app_or_slug if isinstance(app_or_slug, str) else app_or_slug["slug"]
+    return f"wl-{slug}"
+
+
+def _db_slug(app):
+    return f"{app['slug']}-db"
+
+
+def _db_env_for_app(connector, app):
+    """Env-Variablen, die die App auf ihre Datenbank zeigen lassen ({db_host} usw.)."""
+    spec = db_spec(connector)
+    if not spec:
+        return {}
+    values = app.get("values") or {}
+    choice = db_choice(connector, values)
+    ctx = {"db_host": dockerctl.container_name(_db_slug(app)),
+           "db_name": values.get("db_name", _db_name(app["slug"])),
+           "db_user": values.get("db_user", ""),
+           "db_password": values.get("db_password", "")}
+    env = {}
+    for key, val in (spec.get("env", {}).get(choice) or {}).items():
+        for name, value in ctx.items():
+            val = val.replace("{" + name + "}", value)
+        env[key] = val
+    return env
+
+
+def _wait_for_db(dbslug, values, attempts=45, delay=2):
+    import time
+    # Ausdrücklich über TCP prüfen: während der Erst-Initialisierung startet MariaDB
+    # kurz mit --skip-networking — der Unix-Socket antwortet dann schon, obwohl die
+    # App per Netzwerk noch nicht verbinden könnte (App würde zu früh starten).
+    probe = (f"mariadb --protocol=TCP -h 127.0.0.1 -u{shlex.quote(values['db_user'])} "
+             f"-p{shlex.quote(values['db_password'])} "
+             f"-e 'SELECT 1' {shlex.quote(values['db_name'])} >/dev/null 2>&1 "
+             f"&& echo ready || true")
+    for _ in range(attempts):
+        if "ready" in dockerctl.exec_sh(dbslug, probe, timeout=20):
+            return True
+        time.sleep(delay)
+    return False
+
+
+def _db_network(app):
+    """Netz, in dem App und DB sich erreichen: das gewählte App-Netz — nur beim
+    namenlosen Standard (bridge, ohne Container-DNS) das private App-Netz."""
+    net = app.get("network") or ""
+    return net if net not in ("", "bridge") else app_network(app)
+
+
+def ensure_db(app, connector):
+    """Datenbank-Container der App bereitstellen (nur bei MariaDB-Wahl): Netz anlegen,
+    Zugangsdaten erzeugen UND persistieren, Container starten bzw. erzeugen, auf
+    Bereitschaft warten. Idempotent."""
+    if db_choice(connector, app.get("values")) != "mariadb":
+        return None
+    if store.get_app_by_slug(f"{app['slug']}-db"):
+        # Eine (ältere) App belegt diesen Namen bereits — nie deren Container kapern.
+        raise ValueError(f"Der Name {app['slug']}-db ist schon von einer App belegt.")
+    values = app["values"]
+    had_creds = bool(values.get("db_password"))
+    prepare_db_values(connector, values, app["slug"], values.get("database"))
+    if not had_creds and app.get("id"):
+        # Neu erzeugte Zugangsdaten sofort speichern — sonst würde jeder Neustart
+        # neue erzeugen und die App käme nie mehr an ihre Datenbank.
+        store.update_app(app["id"], {"values_json": _dumps(values)})
+    net = _db_network(app)
+    try:
+        if not any(n.get("Name") == net for n in dockerctl.networks()):
+            dockerctl.create_network(net)
+    except Exception:  # noqa: BLE001 - Netz kann schon existieren (Race)
+        pass
+    dbslug = _db_slug(app)
+    state = dockerctl.status(dbslug)
+    if state == "running":
+        return dbslug
+    if state not in ("missing", ""):
+        dockerctl.start(dbslug)
+        _wait_for_db(dbslug, values)
+        return dbslug
+    data_dir = host_data_path(dbslug, app["data_path"])
+    if not had_creds and os.path.isdir(data_dir) and os.listdir(data_dir):
+        # Rest einer früheren Installation: MariaDB würde die neuen Zugangsdaten
+        # bei nicht-leerem Datenverzeichnis stillschweigend ignorieren (Env greift
+        # nur bei Erst-Initialisierung). Alten Stand beiseitelegen, nicht löschen.
+        import time
+        os.replace(data_dir, f"{data_dir}.alt-{int(time.time())}")
+    os.makedirs(data_dir, exist_ok=True)
+    dockerctl.pull(DB_IMAGE)
+    dockerctl.run_container(
+        slug=dbslug, image=DB_IMAGE,
+        env={"MARIADB_DATABASE": values["db_name"],
+             "MARIADB_USER": values["db_user"],
+             "MARIADB_PASSWORD": values["db_password"],
+             "MARIADB_ROOT_PASSWORD": values.get("db_root_password") or values["db_password"]},
+        volumes=[(data_dir, "/var/lib/mysql")],
+        ram_mb=DB_RAM_MB, network=net)
+    _wait_for_db(dbslug, values)
+    return dbslug
+
+
+def start_app(app, connector=None):
+    connector = connector or catalog.get(app["connector_id"]) or {}
+    ensure_db(app, connector)                    # DB zuerst (falls vorhanden)
+    dockerctl.start(app["slug"])
+
+
+def stop_app(app):
+    dockerctl.stop(app["slug"])                  # App zuerst, dann die DB
+    if dockerctl.status(_db_slug(app)) not in ("missing", ""):
+        dockerctl.stop(_db_slug(app))            # auch 'restarting'/'exited' sauber stoppen
+
+
+def restart_app(app, connector=None):
+    connector = connector or catalog.get(app["connector_id"]) or {}
+    ensure_db(app, connector)
+    dockerctl.restart(app["slug"])
+
+
 def install(connector_id, form, seed_dir=None, extra_env=None):
     """Neue App aus dem Katalog installieren. seed_dir: vorhandene Daten (Backup einer
     Alt-Installation), die vor dem ersten Start ins Datenverzeichnis gelegt werden.
@@ -372,6 +542,10 @@ def install(connector_id, form, seed_dir=None, extra_env=None):
 
     name = (form.get("name") or connector["name"]).strip()
     slug = unique_slug(name)
+    # App-eigene Datenbank: Auswahl übernehmen, Zugangsdaten unsichtbar erzeugen.
+    prepare_db_values(connector, values, slug, form.get("database"))
+    if db_choice(connector, values) == "mariadb" and (form.get("egress_id") or "").strip():
+        raise ValueError("Ein VPN-Ausgang ist mit einer eigenen Datenbank nicht kombinierbar.")
     exposure = form.get("exposure") or connector.get("default_exposure") or "external"
     container_port = int(connector.get("container_port") or 8080)
     fixed = fixed_ports(connector)
@@ -396,6 +570,12 @@ def install(connector_id, form, seed_dir=None, extra_env=None):
     app_domain = (form.get("domain") or "").strip().lower()
     app_domain = app_domain.split("://")[-1].split("/")[0].split(":")[0].strip(". ")
 
+    # Mit eigener Datenbank laufen App+DB in einem privaten App-Netz (Docker-DNS),
+    # sofern kein eigenes Subnetz gewählt wurde. Die DB veröffentlicht keine Ports.
+    network = form.get("network") or "bridge"
+    if db_choice(connector, values) == "mariadb" and network in ("", "bridge"):
+        network = app_network(slug)
+
     app = {
         "slug": slug, "name": name, "connector_id": connector["id"],
         "group_id": connector["group"], "version": connector["version"],
@@ -403,7 +583,7 @@ def install(connector_id, form, seed_dir=None, extra_env=None):
         "exposure": exposure, "allow_cidr": form.get("allow_cidr") or "",
         "host_port": host_port, "container_port": container_port,
         "location": form.get("location") or "docker",
-        "network": form.get("network") or "bridge",
+        "network": network,
         "data_path": data_root, "manage_host": manage_host,
         "egress_id": (form.get("egress_id") or "").strip(),
         "cpu": float(form.get("cpu") or 1), "ram_mb": int(float(form.get("ram_mb") or 1024)),
@@ -553,9 +733,16 @@ def update(app_id, form, section="basic", allow_keys=None):
         if "location" in form:
             changes["location"] = form["location"]
         if "network" in form:
-            changes["network"] = form["network"]
+            net = form["network"]
+            if db_choice(connector, app["values"]) == "mariadb" and net in ("", "bridge"):
+                net = app_network(app)   # App-Netz mit der eigenen DB nie verlieren
+            changes["network"] = net
         if "egress_id" in form:
-            changes["egress_id"] = (form.get("egress_id") or "").strip()
+            egress_id = (form.get("egress_id") or "").strip()
+            if egress_id and db_choice(connector, app["values"]) == "mariadb":
+                raise ValueError("Ein VPN-Ausgang ist mit einer eigenen Datenbank "
+                                 "nicht kombinierbar.")
+            changes["egress_id"] = egress_id
         if "data_path" in form and form["data_path"]:
             changes["data_path"] = form["data_path"]
         if form.get("cpu"):
@@ -573,10 +760,21 @@ def update(app_id, form, section="basic", allow_keys=None):
                 values[key] = coerce(field, form.get(key))
         changes["values_json"] = _dumps(values)
 
+    old_data_path = app["data_path"]
     store.update_app(app_id, changes)
     app = store.get_app(app_id)
 
     if section == "basic":
+        # Datenlaufwerk gewechselt: die App-eigene Datenbank zieht mit um (gleiche
+        # Zugangsdaten) — sonst zeigte die frisch aufgesetzte App auf eine alte DB.
+        if (app["data_path"] != old_data_path
+                and db_choice(connector, app["values"]) == "mariadb"):
+            dockerctl.remove(_db_slug(app), missing_ok=True)
+            old_dir = host_data_path(_db_slug(app), old_data_path)
+            new_dir = host_data_path(_db_slug(app), app["data_path"])
+            if os.path.isdir(old_dir) and not os.path.exists(new_dir):
+                os.makedirs(os.path.dirname(new_dir), exist_ok=True)
+                shutil.move(old_dir, new_dir)
         # Port/Ressourcen/Netzwerk erfordern einen neuen Container.
         _run_app_container(app, connector)
         # Konfigdateien im Container gehen beim Neuerstellen verloren.
@@ -625,14 +823,21 @@ def remove(app_id, delete_data=False, delete_dns=False):
         except Exception:  # noqa: BLE001 - DNS-Löschen ist best-effort
             pass
     dockerctl.remove(app["slug"], missing_ok=True)
+    dockerctl.remove(_db_slug(app), missing_ok=True)   # App-eigene Datenbank mit
     vpn.egress_down(app["slug"])
     connector = catalog.get(app["connector_id"]) or {}
     for port, proto in app_ports(app, connector):
         _ufw("--force", "delete", "allow", f"{port}/{proto}")
     if delete_data:
-        path = host_data_path(app, app["data_path"])
-        if path.startswith(("/var/lib/weblab/", "/mnt/", "/srv/", "/data/")) and os.path.isdir(path):
-            subprocess.run(["rm", "-rf", path], capture_output=True, text=True)
+        for path in (host_data_path(app, app["data_path"]),
+                     host_data_path(_db_slug(app), app["data_path"])):
+            if path.startswith(("/var/lib/weblab/", "/mnt/", "/srv/", "/data/")) \
+                    and os.path.isdir(path):
+                subprocess.run(["rm", "-rf", path], capture_output=True, text=True)
+    try:
+        dockerctl.remove_network(app_network(app))
+    except Exception:  # noqa: BLE001 - Netz existiert evtl. nicht
+        pass
     store.delete_app(app_id)
     sync_proxy()
 

@@ -309,14 +309,14 @@ def page(title, body, active="/", user=None, flash=None, head="", banner="", is_
 <body><div class="layout"><aside class="side">
 <div class="brand">weblab<small>Server-Verwaltung</small></div>
 <nav class="nav">{nav}</nav>{who}</aside>
-<main class="main">{banner}{msg}{body}</main></div>{INFO_OVERLAY}{GLOBAL_JS}</body></html>"""
+<main class="main">{banner}{msg}{body}</main></div>{GLOBAL_JS}</body></html>"""
 
 
 def bare(title, body, head=""):
     return f"""<!doctype html><html lang="de"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{esc(title)} — weblab</title><style>{CSS}</style>{head}</head>
-<body><div class="center">{body}</div>{INFO_OVERLAY}{GLOBAL_JS}</body></html>"""
+<body><div class="center">{body}</div>{GLOBAL_JS}</body></html>"""
 
 
 def stat(label, value, percent=None, note=""):
@@ -445,31 +445,10 @@ def open_button(dialog_id, label, cls="btn primary"):
 
 DEPENDS_JS = ""  # Interaktive Logik liegt global in GLOBAL_JS (page/bare).
 
-INFO_OVERLAY = """
-<button type="button" class="infobtn" id="infoBtn" title="Hinweise ein-/ausblenden">&#9432;</button>
-<aside class="infopanel" id="infoPanel"><h4>Hinweis</h4>
-<div class="ibody" id="infoBody">Ein Feld anklicken oder überfahren zeigt hier Hinweise.</div></aside>
-"""
+INFO_OVERLAY = ""  # entfernt: aufgeraeumtes Interface ohne Hinweis-Overlay
 
 GLOBAL_JS = """<script>
 (function(){
- // Info-Overlay
- var btn=document.getElementById('infoBtn'),panel=document.getElementById('infoPanel'),
-     body=document.getElementById('infoBody');
- var DEF='Ein Feld anklicken oder überfahren zeigt hier Hinweise.';
- function shown(){return panel&&panel.classList.contains('show');}
- function persist(v){try{localStorage.setItem('weblab_info',v?'1':'0');}catch(e){}}
- if(btn&&panel){
-  try{if(localStorage.getItem('weblab_info')==='1')panel.classList.add('show');}catch(e){}
-  btn.addEventListener('click',function(){panel.classList.toggle('show');persist(shown());});
-  function set(t){if(body)body.textContent=t||DEF;}
-  function info(e){var el=e.target.closest('[data-info]');
-    return el&&el.getAttribute('data-info')?el.getAttribute('data-info'):null;}
-  // Standardmäßig aus: Hinweise aktualisieren nur, wenn das Overlay per Knopf geöffnet wurde.
-  function upd(e){if(!shown())return;var t=info(e);if(t!==null)set(t);}
-  document.addEventListener('focusin',upd);
-  document.addEventListener('mouseover',upd);
- }
  // Gesperrte Felder freischalten
  document.querySelectorAll('[data-unlock]').forEach(function(b){
   b.addEventListener('click',function(){
@@ -477,9 +456,6 @@ GLOBAL_JS = """<script>
    var wrap=f.closest('.field');
    if(f.disabled){f.disabled=false;f.focus();if(wrap){wrap.classList.remove('locked');wrap.classList.add('unlocked');}
      b.textContent='Sperren';
-     if(body){body.textContent='Achtung: Diese Änderung erstellt den Container neu. '
-       +'Daten bleiben erhalten, die App startet aber neu.';}
-     if(panel)panel.classList.add('show');
    }else{f.disabled=true;if(wrap){wrap.classList.add('locked');wrap.classList.remove('unlocked');}
      b.textContent='Freischalten';}
   });

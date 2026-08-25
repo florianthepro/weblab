@@ -30,11 +30,11 @@
         "type": "password",
         "required": true,
         "generate": true,
-        "help": "Leer lassen = sicheres Passwort wird erzeugt.",
         "target": {
           "kind": "env",
           "name": "PASSWORD"
-        }
+        },
+        "auto": "password"
       }
     ],
     "specific": []

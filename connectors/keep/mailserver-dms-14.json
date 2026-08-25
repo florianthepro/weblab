@@ -99,10 +99,10 @@
         "type": "password",
         "required": true,
         "generate": true,
-        "help": "Leer lassen = sicheres Passwort wird erzeugt und danach angezeigt.",
         "target": {
           "kind": "none"
-        }
+        },
+        "auto": "password"
       }
     ],
     "specific": [
