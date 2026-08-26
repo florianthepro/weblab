@@ -134,5 +134,7 @@
     "Der erste Start provisioniert die Domäne und kann einige Minuten dauern.",
     "Anmeldung an der Domäne als „Administrator“ mit dem generierten Passwort."
   ],
-  "audience": "server"
+  "audience": "server",
+  "featured": true,
+  "featured_rank": 15
 }

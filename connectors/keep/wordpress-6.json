@@ -42,5 +42,7 @@
   "notes": [
     "Sprache und Admin-Konto werden beim ersten Aufruf im Browser eingerichtet."
   ],
-  "audience": "server"
+  "audience": "server",
+  "featured": true,
+  "featured_rank": 7
 }

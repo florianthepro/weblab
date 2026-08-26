@@ -41,5 +41,7 @@
   "notes": [
     "Anmeldung mit Benutzer „admin“ und dem erzeugten Passwort."
   ],
-  "audience": "server"
+  "audience": "server",
+  "featured": true,
+  "featured_rank": 10
 }

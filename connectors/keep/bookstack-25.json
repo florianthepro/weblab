@@ -61,5 +61,7 @@
   "notes": [
     "Erste Anmeldung: admin@admin.com / password — danach sofort ändern."
   ],
-  "audience": "server"
+  "audience": "server",
+  "featured": true,
+  "featured_rank": 8
 }

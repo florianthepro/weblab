@@ -30,5 +30,7 @@
     "specific": []
   },
   "advanced": {},
-  "audience": "server"
+  "audience": "server",
+  "featured": true,
+  "featured_rank": 12
 }

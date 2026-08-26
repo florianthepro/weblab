@@ -73,5 +73,7 @@
     "Indizierung braucht viel Arbeitsspeicher — mindestens 4 GB empfohlen."
   ],
   "advanced": {},
-  "audience": "homelab"
+  "audience": "homelab",
+  "featured": true,
+  "featured_rank": 4
 }

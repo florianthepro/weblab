@@ -28,5 +28,7 @@
     "Verbindet sich bei der Einrichtung mit einem vorhandenen Jellyfin- oder Plex-Server."
   ],
   "advanced": {},
-  "audience": "homelab"
+  "audience": "homelab",
+  "featured": true,
+  "featured_rank": 3
 }

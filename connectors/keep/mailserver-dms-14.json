@@ -211,5 +211,7 @@
       "comment": "DMARC-Richtlinie"
     }
   ],
-  "audience": "beide"
+  "audience": "beide",
+  "featured": true,
+  "featured_rank": 6
 }

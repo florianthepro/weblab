@@ -39,5 +39,7 @@
   "notes": [
     "Admin-Konto wird beim ersten Aufruf im Browser eingerichtet — die Datenbankfelder sind dabei schon ausgefüllt."
   ],
-  "audience": "server"
+  "audience": "server",
+  "featured": true,
+  "featured_rank": 14
 }

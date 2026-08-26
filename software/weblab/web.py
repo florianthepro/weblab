@@ -995,41 +995,49 @@ class Handler(BaseHTTPRequestHandler):
                           if rows else
                           "<div class='card muted'>Noch nichts installiert.</div>")
 
-        # Katalog: nach Kategorie gruppiert, filterbar nach Suche, Zielgruppe
-        # (Homelab/Server) und Kategorie — bei 70+ Apps sonst unübersichtlich.
+        # Katalog wie ein App-Store: standardmäßig NUR die kuratierten Empfehlungen
+        # (ein sauberes Produkt pro Bedarf). Der volle Katalog erscheint erst, wenn
+        # man sucht oder nach Zielgruppe/Kategorie filtert — suchen und finden statt
+        # scrollen.
         groups = catalog.groups()
         aud_label = {"homelab": "Homelab", "server": "Server", "beide": "Homelab · Server"}
-        by_category = {}
-        for group in groups:
-            by_category.setdefault(group["category"], []).append(group)
 
-        sections = ""
-        for category in sorted(by_category):
-            cards = ""
-            for group in sorted(by_category[category], key=lambda g: g["name"].lower()):
-                is_new = any(v["id"] in news for v in group["versions"])
-                tag = ' <span class="badge">neu</span>' if is_new else ""
-                audience = (group["latest"].get("audience") or "beide").lower()
-                cards += f"""<div class="appcard" data-name="{ui.esc(group['name'].lower())}"
+        def card(group, big=False):
+            is_new = any(v["id"] in news for v in group["versions"])
+            tag = ' <span class="badge">neu</span>' if is_new else ""
+            audience = (group["latest"].get("audience") or "beide").lower()
+            return f"""<div class="appcard{' big' if big else ''}" data-name="{ui.esc(group['name'].lower())}"
  data-aud="{ui.esc(audience)}">
 <div class="row" style="flex-wrap:nowrap"><span class="ico">{ui.esc(group['icon'])}</span>
 <div style="min-width:0"><div class="nm">{ui.esc(group['name'])}{tag}</div>
-<div class="aud">{ui.esc(aud_label.get(audience, audience))}</div></div></div>
+<div class="aud">{ui.esc(group['category'])} · {ui.esc(aud_label.get(audience, audience))}</div></div></div>
 <div class="sm">{ui.esc(group['summary'])}</div>
 <a class="btn primary" href="/apps/catalog/{ui.esc(group['group'])}">Installieren</a></div>"""
-            sections += (f'<div class="catsec" data-cat="{ui.esc(category)}">'
-                         f'<h3>{ui.esc(category)}</h3>'
-                         f'<div class="apps">{cards}</div></div>')
-        if not sections:
-            sections = "<div class='card muted'>Keine Apps gefunden.</div>"
-        count = sum(1 for g in groups if any(v["id"] in news for v in g["versions"]))
-        news_tag = f' <span class="badge">{count} neu</span>' if count else ""
+
+        featured = sorted((g for g in groups if g["latest"].get("featured")),
+                          key=lambda g: g["latest"].get("featured_rank", 99))
+        featured_html = "".join(card(g, big=True) for g in featured)
+
+        by_category = {}
+        for group in groups:
+            by_category.setdefault(group["category"], []).append(group)
+        sections = "".join(
+            f'<div class="catsec" data-cat="{ui.esc(category)}"><h3>{ui.esc(category)}</h3>'
+            f'<div class="apps">'
+            + "".join(card(g) for g in sorted(by_category[category], key=lambda g: g["name"].lower()))
+            + '</div></div>'
+            for category in sorted(by_category))
         chips = "".join(f'<button type="button" data-cat="{ui.esc(c)}">{ui.esc(c)}</button>'
                         for c in sorted(by_category))
-        toolbar = f"""<div class="cat-tools" id="catTools">
+
+        body = f"""<h1>Apps</h1>
+{self._transfer_hint()}
+<h2>Installiert</h2>{installed_html}
+<h2>Katalog</h2>
+<div class="cat-tools" id="catTools">
  <div class="row1">
-  <input class="cat-search" id="catSearch" type="search" placeholder="App suchen …"
-   autocomplete="off">
+  <input class="cat-search" id="catSearch" type="search"
+   placeholder="Unter {len(groups)} Apps suchen …" autocomplete="off">
   <div class="seg">
    <button type="button" class="on" data-aud="">Alle</button>
    <button type="button" data-aud="homelab">Homelab</button>
@@ -1037,14 +1045,10 @@ class Handler(BaseHTTPRequestHandler):
   </div>
  </div>
  <div class="catchips">{chips}</div>
-</div>"""
-
-        body = f"""<h1>Apps</h1>
-{self._transfer_hint()}
-<h2>Installiert</h2>{installed_html}
-<h2>Katalog · {len(groups)} Apps{news_tag}</h2>
-{toolbar}
-{sections}
+</div>
+<div id="catFeatured"><h3 class="cat-head">Empfohlen</h3>
+<div class="apps featured">{featured_html}</div></div>
+<div id="catAll" style="display:none">{sections}</div>
 <div class="cat-empty" id="catEmpty">Nichts gefunden — Suche oder Filter anpassen.</div>"""
         self._render("Apps", body, "/apps")
 

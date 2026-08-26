@@ -172,5 +172,7 @@
       ]
     }
   },
-  "audience": "homelab"
+  "audience": "homelab",
+  "featured": true,
+  "featured_rank": 16
 }

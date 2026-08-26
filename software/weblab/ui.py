@@ -42,7 +42,11 @@ a:hover{text-decoration:underline;text-underline-offset:2px}
 .layout{display:grid;grid-template-columns:230px 1fr;min-height:100vh}
 .side{background:var(--panel);border-right:1px solid var(--line);padding:20px 14px;
  position:sticky;top:0;height:100vh;overflow:auto;display:flex;flex-direction:column}
-.brand{font-weight:660;font-size:16px;letter-spacing:-.02em;padding:2px 10px 20px}
+.brand{font-weight:660;font-size:16px;letter-spacing:-.02em;padding:2px 10px 20px;
+ display:flex;align-items:center;gap:9px}
+.brand .mark{width:26px;height:26px;flex:0 0 26px;border-radius:8px;
+ background:linear-gradient(135deg,var(--accent),color-mix(in srgb,var(--accent) 55%,#7c3aed));
+ display:grid;place-items:center;color:#fff;font-size:13px;font-weight:700}
 .brand small{display:block;font-weight:450;font-size:11.5px;color:var(--muted);
  letter-spacing:.02em;margin-top:2px}
 .nav{display:flex;flex-direction:column;gap:1px}
@@ -208,9 +212,17 @@ details.sec>.in{padding:16px 18px}
 .catchips button.on{background:var(--accent-soft);border-color:
  color-mix(in srgb,var(--accent) 40%,var(--line));color:var(--accent)}
 .catsec{margin:0 0 4px}
-.catsec h3{font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);
- margin:20px 0 10px;font-weight:640}
+.catsec h3,.cat-head{font-size:12px;text-transform:uppercase;letter-spacing:.05em;
+ color:var(--muted);margin:20px 0 10px;font-weight:640}
 .cat-empty{display:none;color:var(--muted);padding:24px 0;text-align:center}
+
+/* Empfohlen: größere, hochwertigere Karten (ein Produkt pro Bedarf) */
+.apps.featured{grid-template-columns:repeat(auto-fill,minmax(300px,1fr))}
+.appcard.big{padding:18px;gap:12px}
+.appcard.big .ico{width:46px;height:46px;flex-basis:46px;font-size:27px;border-radius:11px;
+ background:linear-gradient(135deg,var(--accent-soft),var(--panel-2))}
+.appcard.big .nm{font-size:15.5px}
+.appcard.big .sm{font-size:13.5px}
 
 /* Reiter */
 .tabs{display:flex;gap:2px;border-bottom:1px solid var(--line);margin:0 0 22px;
@@ -338,7 +350,7 @@ def page(title, body, active="/", user=None, flash=None, head="", banner="", is_
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{esc(title)} — weblab</title><style>{CSS}</style>{head}</head>
 <body><div class="layout"><aside class="side">
-<div class="brand">weblab<small>Server-Verwaltung</small></div>
+<div class="brand"><span class="mark">w</span><span>weblab<small>Server-Verwaltung</small></span></div>
 <nav class="nav">{nav}</nav>{who}</aside>
 <main class="main">{banner}{msg}{body}</main></div>{GLOBAL_JS}</body></html>"""
 
@@ -526,13 +538,19 @@ GLOBAL_JS = """<script>
      b.innerHTML='<span class="spinner"></span> '+b.textContent;},0);}
   });
  });
- // Katalog: Suche + Zielgruppe (Alle/Homelab/Server) + Kategorien filtern
+ // Katalog wie ein Store: ohne Filter nur die Empfehlungen; sobald gesucht oder
+ // gefiltert wird, erscheint der volle Katalog (nach Kategorie gruppiert).
  var tools=document.getElementById('catTools');
  if(tools){
   var q='',aud='',cat='';
   function apply(){
+   var feat=document.getElementById('catFeatured'),all=document.getElementById('catAll'),
+       e=document.getElementById('catEmpty'),browsing=!!(q||aud||cat);
+   if(feat)feat.style.display=browsing?'none':'';
+   if(all)all.style.display=browsing?'':'none';
+   if(!browsing){if(e)e.style.display='none';return;}
    var any=false;
-   document.querySelectorAll('.catsec').forEach(function(sec){
+   document.querySelectorAll('#catAll .catsec').forEach(function(sec){
     var vis=0;
     sec.querySelectorAll('.appcard').forEach(function(c){
      var ok=true;
@@ -544,7 +562,7 @@ GLOBAL_JS = """<script>
     });
     sec.style.display=vis?'':'none';if(vis)any=true;
    });
-   var e=document.getElementById('catEmpty');if(e)e.style.display=any?'none':'block';
+   if(e)e.style.display=any?'none':'block';
   }
   var s=document.getElementById('catSearch');
   if(s)s.addEventListener('input',function(){q=s.value.trim().toLowerCase();apply();});
