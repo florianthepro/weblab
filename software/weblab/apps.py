@@ -27,8 +27,9 @@ def slugify(name):
 def unique_slug(name):
     base = slugify(name)
     slug, index = base, 2
-    # "-db" ist für die App-eigenen Datenbank-Container reserviert (kein Zusammenstoß).
-    while store.get_app_by_slug(slug) or slug.endswith("-db"):
+    # "-db"/"-mgr" sind für die App-eigenen Begleit-Container reserviert
+    # (Datenbank bzw. Verwaltungs-Dashboard — kein Zusammenstoß).
+    while store.get_app_by_slug(slug) or slug.endswith(("-db", "-mgr")):
         slug = f"{base}-{index}"
         index += 1
     return slug
@@ -243,9 +244,17 @@ def _sync_proxy_locked():
     panel_hosts = []
     cert_hosts = []
     for app in store.list_apps():
-        if app.get("manage_host"):
-            panel_hosts.append(app["manage_host"])
         connector = catalog.get(app["connector_id"])
+        if app.get("manage_host"):
+            values = app.get("values") or {}
+            if manager_active(connector, values) and values.get("manager_port"):
+                # Die Verwaltungs-Domain zeigt auf das dedizierte Dashboard der App
+                # (bekanntes Produkt im eigenen Container), nicht auf das Panel.
+                routes.append({"domain": app["manage_host"],
+                               "port": int(values["manager_port"]),
+                               "name": f"{app['name']} (Verwaltung)"})
+            else:
+                panel_hosts.append(app["manage_host"])
         if not connector:
             continue
         if connector.get("tls_cert"):
@@ -301,7 +310,9 @@ def _run_app_container(app, connector):
     gluetun-Ausgang (Mullvad/Proton); sonst normal am gewählten Netz."""
     data_dir = host_data_path(app, app["data_path"])
     if connector.get("data"):
-        fresh = not os.path.isdir(data_dir)
+        # "Frisch" schließt ein leeres Verzeichnis ein: install() legt es vor dem
+        # ersten Containerstart bereits an — sonst griffe data_owner nie.
+        fresh = not os.path.isdir(data_dir) or not os.listdir(data_dir)
         os.makedirs(data_dir, exist_ok=True)
         # Images, die NICHT als root laufen (z. B. Grafana uid 472), können ein
         # root-eigenes Datenverzeichnis nicht beschreiben. Connector gibt dann
@@ -513,22 +524,150 @@ def ensure_db(app, connector):
     return dbslug
 
 
+# ---------- Verwaltungs-Dashboard je App (bekanntes Produkt, eigene Domain) ----------
+# Website-Apps (Apache/Nginx) verwalten ihre Dateien NICHT im Panel: der Connector
+# gibt mit einem "manager"-Block ein bekanntes, sicheres Standardprodukt (SFTPGo)
+# vor, das als eigener Container nur an 127.0.0.1 läuft — Caddy legt es auf die
+# Verwaltungs-Domain der App. Zugangsdaten werden erzeugt und nie abgefragt.
+MGR_RAM_MB = 256
+
+
+def manager_spec(connector):
+    return (connector or {}).get("manager") or None
+
+
+def manager_active(connector, values):
+    """Dashboard aktiv? Nur wenn der Connector eins vorsieht UND die App damit
+    installiert wurde (Zugangsdaten in den Werten) — Alt-Apps bleiben unverändert."""
+    return bool(manager_spec(connector) and (values or {}).get("manager_password"))
+
+
+def _mgr_slug(app):
+    return f"{app['slug']}-mgr"
+
+
+def _taken_ports():
+    """Vom Panel vergebene Ports: App-Ports + lokale Dashboard-Ports."""
+    taken = set(store.used_host_ports())
+    for other in store.list_apps():
+        port = (other.get("values") or {}).get("manager_port")
+        try:
+            taken.add(int(port))
+        except (TypeError, ValueError):
+            pass
+    return taken
+
+
+def prepare_manager_values(connector, values, extra_taken=()):
+    """Beim Installieren: (unsichtbare) Zugangsdaten + lokalen Port fürs Dashboard."""
+    spec = manager_spec(connector)
+    if not spec:
+        return
+    values.setdefault("manager_user", spec.get("username") or "admin")
+    values.setdefault("manager_password", secrets.token_urlsafe(15))
+    if not values.get("manager_port"):
+        values["manager_port"] = sysinfo.free_port(taken=_taken_ports() | set(extra_taken))
+
+
+def _manager_fill(template, app, values):
+    """Nur die bekannten Platzhalter ersetzen — andere Klammern (z. B. JSON in
+    Startdateien) bleiben unangetastet."""
+    ctx = {"manager_user": values.get("manager_user", ""),
+           "manager_password": values.get("manager_password", ""),
+           "domain": app.get("domain") or "",
+           "manage_host": app.get("manage_host") or ""}
+    for name, value in ctx.items():
+        template = template.replace("{" + name + "}", str(value))
+    return template
+
+
+def _chown_spec(path, owner):
+    """Besitzer "uid:gid" setzen; ein Fehlschlag ist kein Abbruchgrund."""
+    if not owner or ":" not in str(owner):
+        return
+    try:
+        uid, gid = (int(x) for x in str(owner).split(":", 1))
+        os.chown(path, uid, gid)
+    except (ValueError, OSError):
+        pass
+
+
+def ensure_manager(app, connector):
+    """Dashboard-Container der App bereitstellen: Startdateien (z. B. Nutzerliste)
+    in dessen eigenes Datenverzeichnis schreiben, Container an 127.0.0.1 starten.
+    Idempotent; ein evtl. fehlender Port wird erzeugt UND persistiert."""
+    spec = manager_spec(connector)
+    values = app.get("values") or {}
+    if not spec or not values.get("manager_password"):
+        return None
+    mslug = _mgr_slug(app)
+    if store.get_app_by_slug(mslug):
+        # Eine (ältere) App belegt diesen Namen bereits — nie deren Container kapern.
+        raise ValueError(f"Der Name {mslug} ist schon von einer App belegt.")
+    if not values.get("manager_port"):
+        values["manager_port"] = sysinfo.free_port(taken=_taken_ports())
+        if app.get("id"):
+            store.update_app(app["id"], {"values_json": _dumps(values)})
+    state = dockerctl.status(mslug)
+    if state == "running":
+        return mslug
+    if state not in ("missing", ""):
+        dockerctl.start(mslug)
+        return mslug
+    volumes = [(host_data_path(app, app["data_path"]), spec.get("mount") or "/srv")]
+    if spec.get("data"):
+        own_dir = host_data_path(mslug, app["data_path"])
+        fresh = not os.path.isdir(own_dir) or not os.listdir(own_dir)
+        os.makedirs(own_dir, exist_ok=True)
+        if fresh:
+            _chown_spec(own_dir, spec.get("data_owner"))
+        for filespec in spec.get("files") or []:
+            rel = (filespec.get("path") or "").lstrip("/")
+            if not rel or ".." in rel:
+                continue
+            target = os.path.join(own_dir, rel)
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+            with open(target, "w", encoding="utf-8") as fh:
+                fh.write(_manager_fill(filespec.get("content") or "", app, values))
+            os.chmod(target, 0o600)     # enthält Zugangsdaten
+            _chown_spec(target, spec.get("data_owner"))
+        volumes.append((own_dir, spec["data"]))
+    env = {key: _manager_fill(val, app, values)
+           for key, val in (spec.get("env") or {}).items()}
+    dockerctl.pull(spec["image"])
+    dockerctl.run_container(
+        slug=mslug, image=spec["image"], env=env,
+        ports=[(f"127.0.0.1:{values['manager_port']}",
+                int(spec.get("container_port") or 80), "tcp")],
+        volumes=volumes, ram_mb=int(spec.get("ram_mb") or MGR_RAM_MB))
+    return mslug
+
+
 def start_app(app, connector=None):
     connector = connector or catalog.get(app["connector_id"]) or {}
     ensure_db(app, connector)                    # DB zuerst (falls vorhanden)
     dockerctl.start(app["slug"])
+    try:
+        ensure_manager(app, connector)           # Dashboard mit hochfahren
+    except Exception:  # noqa: BLE001 - sekundär, der App-Start zählt
+        pass
 
 
 def stop_app(app):
-    dockerctl.stop(app["slug"])                  # App zuerst, dann die DB
-    if dockerctl.status(_db_slug(app)) not in ("missing", ""):
-        dockerctl.stop(_db_slug(app))            # auch 'restarting'/'exited' sauber stoppen
+    dockerctl.stop(app["slug"])                  # App zuerst, dann die Begleiter
+    for extra in (_db_slug(app), _mgr_slug(app)):
+        if dockerctl.status(extra) not in ("missing", ""):
+            dockerctl.stop(extra)                # auch 'restarting'/'exited' sauber stoppen
 
 
 def restart_app(app, connector=None):
     connector = connector or catalog.get(app["connector_id"]) or {}
     ensure_db(app, connector)
     dockerctl.restart(app["slug"])
+    try:
+        ensure_manager(app, connector)
+    except Exception:  # noqa: BLE001 - sekundär, der App-Neustart zählt
+        pass
 
 
 def install(connector_id, form, seed_dir=None, extra_env=None, progress=None):
@@ -576,6 +715,9 @@ def install(connector_id, form, seed_dir=None, extra_env=None, progress=None):
         host_port = form.get("host_port")
         host_port = int(host_port) if str(host_port or "").isdigit() else \
             sysinfo.free_port(taken=store.used_host_ports())
+    # Verwaltungs-Dashboard (bekanntes Produkt): Zugangsdaten + lokaler Port,
+    # komplett im Hintergrund — nichts davon taucht im Formular auf.
+    prepare_manager_values(connector, values, extra_taken={host_port})
 
     data_root = form.get("data_path") or "/var/lib/weblab/data"
     data_dir = host_data_path(slug, data_root)
@@ -628,11 +770,13 @@ def install(connector_id, form, seed_dir=None, extra_env=None, progress=None):
         if problem:
             raise RuntimeError(problem)
 
-    for percent, label, step in (
-            (70, "Konfiguration", lambda: _post_install(app, connector, values)),
-            (82, "Firewall", lambda: apply_firewall(app, connector)),
-            (88, "DNS", dns_step),
-            (94, "Reverse-Proxy", sync_proxy)):
+    steps = [(70, "Konfiguration", lambda: _post_install(app, connector, values))]
+    if manager_active(connector, values):
+        steps.append((78, "Verwaltung", lambda: ensure_manager(app, connector)))
+    steps += [(84, "Firewall", lambda: apply_firewall(app, connector)),
+              (89, "DNS", dns_step),
+              (94, "Reverse-Proxy", sync_proxy)]
+    for percent, label, step in steps:
         progress(percent, f"{label} …")
         try:
             step()
@@ -691,6 +835,9 @@ def write_init_files(app, connector, values):
         with open(target, "w", encoding="utf-8") as fh:
             fh.write(content)
         os.chmod(target, 0o644)
+        # Läuft das Dateimanagement der App unter einer anderen uid (data_owner),
+        # gehören ihm auch die Startdateien — sonst wäre index.html unbearbeitbar.
+        _chown_spec(target, connector.get("data_owner"))
         written.append(rel)
     if written:
         # Webserver-Container laufen oft als www-data: Verzeichnis lesbar machen.
@@ -801,11 +948,25 @@ def update(app_id, form, section="basic", allow_keys=None):
             if os.path.isdir(old_dir) and not os.path.exists(new_dir):
                 os.makedirs(os.path.dirname(new_dir), exist_ok=True)
                 shutil.move(old_dir, new_dir)
+        # Das Verwaltungs-Dashboard zieht genauso mit um bzw. wird neu erstellt,
+        # damit seine Mounts (Docroot!) auf den aktuellen Pfad zeigen.
+        if manager_active(connector, app["values"]):
+            dockerctl.remove(_mgr_slug(app), missing_ok=True)
+            if app["data_path"] != old_data_path:
+                old_dir = host_data_path(_mgr_slug(app), old_data_path)
+                new_dir = host_data_path(_mgr_slug(app), app["data_path"])
+                if os.path.isdir(old_dir) and not os.path.exists(new_dir):
+                    os.makedirs(os.path.dirname(new_dir), exist_ok=True)
+                    shutil.move(old_dir, new_dir)
         # Port/Ressourcen/Netzwerk erfordern einen neuen Container.
         _run_app_container(app, connector)
         # Konfigdateien im Container gehen beim Neuerstellen verloren.
         write_init_files(app, connector, app["values"])
         apply_config_files(app, connector, app["values"])
+        try:
+            ensure_manager(app, connector)
+        except Exception:  # noqa: BLE001 - Dashboard ist sekundär, das App-Update zählt
+            pass
         apply_firewall(app, connector)
         if app.get("domain"):
             apply_dns(app, connector, app["values"])
@@ -850,13 +1011,15 @@ def remove(app_id, delete_data=False, delete_dns=False):
             pass
     dockerctl.remove(app["slug"], missing_ok=True)
     dockerctl.remove(_db_slug(app), missing_ok=True)   # App-eigene Datenbank mit
+    dockerctl.remove(_mgr_slug(app), missing_ok=True)  # … und Verwaltungs-Dashboard
     vpn.egress_down(app["slug"])
     connector = catalog.get(app["connector_id"]) or {}
     for port, proto in app_ports(app, connector):
         _ufw("--force", "delete", "allow", f"{port}/{proto}")
     if delete_data:
         for path in (host_data_path(app, app["data_path"]),
-                     host_data_path(_db_slug(app), app["data_path"])):
+                     host_data_path(_db_slug(app), app["data_path"]),
+                     host_data_path(_mgr_slug(app), app["data_path"])):
             if path.startswith(("/var/lib/weblab/", "/mnt/", "/srv/", "/data/")) \
                     and os.path.isdir(path):
                 subprocess.run(["rm", "-rf", path], capture_output=True, text=True)

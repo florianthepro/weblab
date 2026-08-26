@@ -1228,7 +1228,11 @@ class Handler(BaseHTTPRequestHandler):
     def _app_tabs(self, app, active):
         connector = catalog.get(app["connector_id"]) or {}
         items = [("Übersicht", f"/apps/{app['id']}")]
-        if connector.get("manage_subdomain"):  # Dateimanager nur bei Seiten/Diensten
+        if connector.get("manage_subdomain") \
+                and not appsvc.manager_active(connector, app.get("values")):
+            # Eingebauter Datei-Tab nur noch für Alt-Apps ohne dediziertes
+            # Dashboard — neue Website-Apps verwalten Dateien über ihr eigenes
+            # Verwaltungsprodukt auf der Verwaltungs-Domain.
             items.append(("Dateien", f"/apps/{app['id']}/files"))
         items += [("Einstellungen", f"/apps/{app['id']}/edit"),
                   ("Protokoll", f"/apps/{app['id']}/logs")]
@@ -1288,6 +1292,18 @@ class Handler(BaseHTTPRequestHandler):
                     continue
                 rows += (f"<tr><td>{ui.esc(field.get('label', field['key']))}</td>"
                          f"<td><code class='mono'>{ui.esc(value)}</code></td></tr>")
+            mspec = appsvc.manager_spec(connector)
+            if mspec and appsvc.manager_active(connector, app["values"]):
+                mlabel = mspec.get("label") or "Verwaltung"
+                mhost = app.get("manage_host") or ""
+                mlink = (f'<a href="https://{ui.esc(mhost)}" target="_blank" '
+                         f'rel="noopener">https://{ui.esc(mhost)} ↗</a>') if mhost \
+                    else "<span class='muted'>Verwaltungs-Domain fehlt</span>"
+                rows += (f"<tr><td>Dateiverwaltung ({ui.esc(mlabel)})</td><td>{mlink}</td></tr>"
+                         f"<tr><td>{ui.esc(mlabel)} — Benutzer</td><td><code class='mono'>"
+                         f"{ui.esc(app['values'].get('manager_user', ''))}</code></td></tr>"
+                         f"<tr><td>{ui.esc(mlabel)} — Passwort</td><td><code class='mono'>"
+                         f"{ui.esc(app['values'].get('manager_password', ''))}</code></td></tr>")
             for note in connector.get("notes") or []:
                 rows += f"<tr><td colspan='2' class='help'>ℹ {ui.esc(note)}</td></tr>"
             if rows:

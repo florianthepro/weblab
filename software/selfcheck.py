@@ -101,6 +101,24 @@ def _check_connector(name, c):
     for vol in c.get("volumes") or []:
         if not vol.get("host", "").startswith("/") or not vol.get("container", "").startswith("/"):
             problems.append(f"volumes-Eintrag ungültig: {vol!r}")
+    mgr = c.get("manager")
+    if mgr:
+        mimage = mgr.get("image") or ""
+        if not mimage or ":" not in mimage or mimage.endswith(":latest"):
+            problems.append(f"manager.image fehlt oder ohne festen Tag: {mimage!r}")
+        mport = mgr.get("container_port")
+        if not isinstance(mport, int) or not 0 < mport < 65536:
+            problems.append(f"manager.container_port ungültig: {mport!r}")
+        if not str(mgr.get("mount") or "").startswith("/"):
+            problems.append("manager.mount muss ein absoluter Container-Pfad sein")
+        if mgr.get("data") and not str(mgr["data"]).startswith("/"):
+            problems.append("manager.data muss ein absoluter Container-Pfad sein")
+        if not c.get("data"):
+            problems.append("manager ohne data-Block (kein Docroot zum Einbinden)")
+        for filespec in mgr.get("files") or []:
+            rel = str(filespec.get("path") or "")
+            if not rel or rel.startswith("/") or ".." in rel:
+                problems.append(f"manager.files-Pfad ungültig: {rel!r}")
     for prob in problems:
         rc = fail(f"connectors/keep/{name}: {prob}")
     return rc

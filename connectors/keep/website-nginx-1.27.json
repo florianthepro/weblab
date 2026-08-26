@@ -17,14 +17,38 @@
     "container_path": "/var/www/html",
     "label": "Webseiten-Dateien"
   },
+  "data_owner": "1000:1000",
   "env": {},
+  "manager": {
+    "label": "SFTPGo",
+    "image": "drakkan/sftpgo:v2.7.5",
+    "container_port": 8080,
+    "mount": "/srv/sftpgo/data/site",
+    "data": "/var/lib/sftpgo",
+    "data_owner": "1000:1000",
+    "username": "webmaster",
+    "env": {
+      "SFTPGO_DATA_PROVIDER__CREATE_DEFAULT_ADMIN": "1",
+      "SFTPGO_DEFAULT_ADMIN_USERNAME": "admin",
+      "SFTPGO_DEFAULT_ADMIN_PASSWORD": "{manager_password}",
+      "SFTPGO_LOADDATA_FROM": "/var/lib/sftpgo/init-users.json"
+    },
+    "files": [
+      {
+        "path": "init-users.json",
+        "content": "{\"users\":[{\"username\":\"{manager_user}\",\"password\":\"{manager_password}\",\"status\":1,\"home_dir\":\"/srv/sftpgo/data/site\",\"permissions\":{\"/\":[\"*\"]}}]}"
+      }
+    ]
+  },
   "init_files": [
     {
       "path": "index.html",
-      "content": "<!doctype html>\n<html lang=\"de\">\n<meta charset=\"utf-8\">\n<title>{index_title}</title>\n<h1>{index_title}</h1>\n<p>Diese Webseite läuft über weblab.</p>\n<p>Bearbeite die Dateien im Panel unter <b>Dateien</b>. PHP lässt sich unter <b>Einstellungen → Spezifisch</b> aktivieren.</p>\n"
+      "content": "<!doctype html>\n<html lang=\"de\">\n<meta charset=\"utf-8\">\n<title>{index_title}</title>\n<h1>{index_title}</h1>\n<p>Diese Webseite läuft über weblab.</p>\n<p>Dateien verwaltest du über das Verwaltungs-Dashboard (SFTPGo) auf der Verwaltungs-Domain dieser App. PHP lässt sich unter <b>Einstellungen → Spezifisch</b> aktivieren.</p>\n"
     }
   ],
   "notes": [
+    "Dateien verwaltest du über SFTPGo auf der Verwaltungs-Domain — Anmeldung mit den Zugangsdaten unten.",
+    "Admin-Oberfläche von SFTPGo: /web/admin (Benutzer admin, gleiches Passwort).",
     "PHP unter Einstellungen → Spezifisch einschalten."
   ],
   "fields": {
