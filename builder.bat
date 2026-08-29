@@ -33,8 +33,8 @@ if not exist "%BUILD%" mkdir "%BUILD%"
 if errorlevel 1 goto :fehler
 
 echo   Umgebung ...
-if not exist "%VPY%" "%PY%" -m venv "%VENV%"
-if errorlevel 1 goto :fehler
+if exist "%VPY%" "%VPY%" -c "import sys" >nul 2>&1 || rmdir /s /q "%VENV%"
+if not exist "%VPY%" ("%PY%" -m venv "%VENV%" || goto :fehler)
 "%VPY%" -m pip install --quiet --no-input --disable-pip-version-check --only-binary=:all: "%PYINSTALLER%"
 if errorlevel 1 (
   echo   PyInstaller konnte nicht geladen werden - Internetverbindung pruefen.
@@ -47,12 +47,15 @@ echo   Symbol ...
 if errorlevel 1 goto :fehler
 
 echo   Bauen ... ^(beim ersten Mal ein paar Minuten^)
+rem  PyInstaller loest relative Pfade gegen den spec-Ordner auf - daher absolut angeben.
 "%VPY%" -m PyInstaller --noconfirm --clean --onefile --windowed --noupx ^
-  --name weblab --icon "desktop\weblab.ico" --version-file "desktop\version_info.txt" ^
-  --add-data "software\weblab\ui.py;." --add-data "software\weblab\icon.py;." ^
+  --name weblab --icon "%CD%\desktop\weblab.ico" ^
+  --version-file "%CD%\desktop\version_info.txt" ^
+  --add-data "%CD%\software\weblab\ui.py;." ^
+  --add-data "%CD%\software\weblab\icon.py;." ^
   --exclude-module tkinter --exclude-module unittest ^
-  --distpath "dist" --workpath "build\work" --specpath "build" ^
-  "desktop\weblab_desktop.py"
+  --distpath "%CD%\dist" --workpath "%CD%\build\work" --specpath "%CD%\build" ^
+  "%CD%\desktop\weblab_desktop.py"
 if errorlevel 1 goto :fehler
 
 echo(

@@ -22,7 +22,8 @@ INSTALL_CMD = ("curl -fsSL https://raw.githubusercontent.com/florianthepro/webla
                "| sudo bash")
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path[:0] = [HERE, os.path.join(HERE, "..", "software", "weblab")]
+if not getattr(sys, "frozen", False):
+    sys.path[:0] = [HERE, os.path.join(HERE, "..", "software", "weblab")]
 try:
     import ui
     CSS, ESC = ui.CSS, ui.esc
@@ -37,7 +38,8 @@ except Exception:  # noqa: BLE001 - im gebauten exe liegt ui.py daneben, sonst N
 
 def config_dir():
     if os.name == "nt":
-        base = os.environ.get("APPDATA") or os.path.expanduser("~")
+        base = (os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA")
+                or os.path.expanduser("~"))
     else:
         base = os.environ.get("XDG_CONFIG_HOME") or os.path.join(os.path.expanduser("~"), ".config")
     path = os.path.join(base, "weblab")
@@ -54,6 +56,7 @@ def _read(name, default):
 
 
 def _write(name, data, private=False):
+    """private wirkt nur auf POSIX; unter Windows schuetzt die ACL des Benutzerordners."""
     path = os.path.join(config_dir(), name)
     tmp = path + ".tmp"
     flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
@@ -64,18 +67,26 @@ def _write(name, data, private=False):
 
 def servers():
     data = _read("servers.json", [])
-    return data if isinstance(data, list) else []
+    if not isinstance(data, list):
+        return []
+    return [e for e in data
+            if isinstance(e, dict) and isinstance(e.get("name"), str)
+            and isinstance(e.get("url"), str)]
 
 
 def normalize(address):
+    """Nur Web-Adressen — alles andere landete sonst in ShellExecute."""
     address = (address or "").strip()
     if not address:
         return ""
     if "://" not in address:
         address = "https://" + address
     parts = urllib.parse.urlsplit(address)
+    if parts.scheme not in ("http", "https"):
+        return ""
     host = parts.netloc or parts.path
-    return f"{parts.scheme or 'https'}://{host.strip('/')}"
+    host = host.strip("/")
+    return f"{parts.scheme}://{host}" if host else ""
 
 
 # ---------- Erreichbarkeit ----------
@@ -173,19 +184,13 @@ def open_window(url, size=WINDOW):
             return True
         except OSError:
             pass
+    if not url.startswith(("http://", "https://")):
+        return False
     import webbrowser
     try:
-        if webbrowser.open(url, new=1):
-            return True
+        return bool(webbrowser.open(url, new=1))
     except webbrowser.Error:
-        pass
-    if os.name == "nt":
-        try:
-            os.startfile(url)       # noqa: S606 - letzter Ausweg: Standardbrowser
-            return True
-        except OSError:
-            pass
-    return False
+        return False
 
 
 # ---------- Oberflaeche ----------
@@ -195,13 +200,13 @@ def dot(state):
     return f'<span class="pill {cls}"><span class="dot"></span>{label}</span>'
 
 
-def page(token, flash=""):
+def page(flash=""):
     rows = ""
     with _LOCK:
         known = dict(_STATUS)
     for index, entry in enumerate(servers()):
         state = (known.get(entry["url"]) or {}).get("state", "")
-        rows += f"""<form method="post" action="/open?k={token}" class="item">
+        rows += f"""<form method="post" action="/open" class="item">
 <input type="hidden" name="index" value="{index}">
 <div class="item-main"><button class="linkish" type="submit">{ESC(entry['name'])}</button>
 <div class="item-sub mono">{ESC(entry['url'])}</div></div>
@@ -213,7 +218,7 @@ def page(token, flash=""):
     if servers():
         options = "".join(f'<option value="{i}">{ESC(s["name"])}</option>'
                           for i, s in enumerate(servers()))
-        remove = f"""<form method="post" action="/remove?k={token}" class="stack">
+        remove = f"""<form method="post" action="/remove" class="stack">
 <label for="rm">Server entfernen</label>
 <select id="rm" name="index">{options}</select>
 <button class="btn danger" type="submit">Entfernen</button></form>"""
@@ -236,7 +241,7 @@ body{{background:var(--bg,#f2f2f7)}}
 {flash}
 <div class="card" style="padding:0">{rows}</div>
 <h2>Hinzufügen</h2>
-<form class="card stack" method="post" action="/add?k={token}">
+<form class="card stack" method="post" action="/add">
 <div class="field"><label for="name">Name</label>
 <input id="name" name="name" placeholder="Mein Server" required></div>
 <div class="field"><label for="url">Adresse</label>
@@ -244,13 +249,16 @@ body{{background:var(--bg,#f2f2f7)}}
  autocapitalize="off" autocorrect="off" spellcheck="false"></div>
 <button class="btn primary" type="submit">Speichern</button></form>
 {f'<h2>Verwalten</h2><div class="card">{remove}</div>' if remove else ''}
+<h2>Programm</h2>
+<form class="card" method="post" action="/quit">
+<button class="btn danger" type="submit">weblab Desktop beenden</button></form>
 <h2>Neuer Server</h2>
 <div class="card"><p class="help" style="margin:0 0 8px">Auf dem Server einmal ausführen:</p>
 <pre>{ESC(INSTALL_CMD)}</pre></div>
 </div>
 <script>
 (function(){{
- fetch('/api/status?k={token}').then(function(r){{return r.json()}}).then(function(d){{
+ fetch('/api/status').then(function(r){{return r.json()}}).then(function(d){{
   document.querySelectorAll('[data-url]').forEach(function(el){{
    var s=(d[el.getAttribute('data-url')]||{{}}).state;
    if(s)el.innerHTML=({{online:'<span class="pill run"><span class="dot"></span>erreichbar</span>',
@@ -264,7 +272,9 @@ body{{background:var(--bg,#f2f2f7)}}
 
 class Handler(BaseHTTPRequestHandler):
     server_version = "weblab-desktop"
-    token = ""
+    token = ""              # nur fuer den ersten Aufruf; danach zaehlt der Sitzungs-Keks
+    session = ""
+    used = False
 
     def log_message(self, *args):
         pass
@@ -278,34 +288,68 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def _cookie(self):
+        for part in (self.headers.get("Cookie") or "").split(";"):
+            key, _, value = part.strip().partition("=")
+            if key == "wl":
+                return value
+        return ""
+
     def _authorized(self):
-        query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
-        if (query.get("k") or [""])[0] != Handler.token:
-            self._ok("verweigert", "text/plain; charset=utf-8", 403)
-            return False
         origin = self.headers.get("Origin")
         if origin and urllib.parse.urlsplit(origin).hostname not in ("127.0.0.1", "localhost"):
             self._ok("verweigert", "text/plain; charset=utf-8", 403)
             return False
-        return True
+        if secrets.compare_digest(self._cookie(), Handler.session):
+            return True
+        self._ok("verweigert", "text/plain; charset=utf-8", 403)
+        return False
 
     def do_GET(self):
         path = urllib.parse.urlparse(self.path).path
         if path == "/ping":
             return self._ok(PING, "text/plain; charset=utf-8")
+        if path == "/start":
+            # Einmaliges Startzeichen gegen einen Sitzungs-Keks tauschen: der Token
+            # steht in der Kommandozeile des Browsers und die kann jeder lokal lesen.
+            query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            token = (query.get("k") or [""])[0]
+            if Handler.used or not secrets.compare_digest(token, Handler.token):
+                return self._ok("abgelaufen", "text/plain; charset=utf-8", 403)
+            Handler.used = True
+            self.send_response(303)
+            self.send_header("Location", "/")
+            self.send_header("Set-Cookie",
+                             f"wl={Handler.session}; Path=/; HttpOnly; SameSite=Strict")
+            self.end_headers()
+            return None
         if not self._authorized():
             return None
         if path == "/api/status":
             return self._ok(json.dumps(refresh_status()), "application/json; charset=utf-8")
-        return self._ok(page(Handler.token))
+        return self._ok(page())
+
+    MAX_BODY = 64 * 1024
 
     def do_POST(self):
         if not self._authorized():
             return None
         path = urllib.parse.urlparse(self.path).path
-        length = int(self.headers.get("Content-Length") or 0)
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            return self._ok("ungültig", "text/plain; charset=utf-8", 400)
+        if not 0 <= length <= self.MAX_BODY:
+            return self._ok("zu groß", "text/plain; charset=utf-8", 413)
         form = {k: v[0] for k, v in urllib.parse.parse_qs(
             self.rfile.read(length).decode("utf-8", "replace"), keep_blank_values=True).items()}
+
+        def index_of(key="index"):
+            try:
+                return int(form.get(key) or -1)
+            except ValueError:
+                return -1
+
         entries = servers()
         if path == "/add":
             url = normalize(form.get("url"))
@@ -313,17 +357,43 @@ class Handler(BaseHTTPRequestHandler):
                 entries.append({"name": (form.get("name") or url).strip(), "url": url})
                 _write("servers.json", entries)
         elif path == "/remove":
-            index = int(form.get("index") or -1)
+            index = index_of()
             if 0 <= index < len(entries):
                 del entries[index]
                 _write("servers.json", entries)
+        elif path == "/quit":
+            self.send_response(303)
+            self.send_header("Location", "/")
+            self.end_headers()
+            threading.Thread(target=self.server.shutdown, daemon=True).start()
+            return None
         elif path == "/open":
-            index = int(form.get("index") or -1)
+            index = index_of()
             if 0 <= index < len(entries):
                 open_window(entries[index]["url"], PANEL_WINDOW)
         self.send_response(303)
-        self.send_header("Location", f"/?k={Handler.token}")
+        self.send_header("Location", "/")
         self.end_headers()
+
+
+class Server(ThreadingHTTPServer):
+    allow_reuse_address = False        # sonst binden unter Windows zwei Instanzen denselben Port
+    daemon_threads = True
+
+
+def _single_instance_lock():
+    """Windows: benannter Mutex — sonst starten zwei Klicks zwei Server."""
+    if os.name != "nt":
+        return True
+    try:
+        import ctypes
+        handle = ctypes.windll.kernel32.CreateMutexW(None, False, "Local\\weblab-desktop")
+        if not handle:
+            return True
+        globals()["_MUTEX"] = handle          # Handle offen halten
+        return ctypes.windll.kernel32.GetLastError() != 183    # ERROR_ALREADY_EXISTS
+    except Exception:  # noqa: BLE001
+        return True
 
 
 def _running_instance():
@@ -332,35 +402,56 @@ def _running_instance():
         return ""
     try:
         with urllib.request.urlopen(url.split("?")[0].rstrip("/") + "/ping", timeout=1.5) as resp:
-            return url if resp.read().decode().strip() == PING else ""
+            return url if resp.read(64).decode("utf-8", "replace").strip() == PING else ""
     except (urllib.error.URLError, OSError, ValueError):
         return ""
 
 
+def hinweis(text):
+    """Meldung zeigen — im Fenster-Modus gibt es keine Konsole."""
+    if os.name == "nt":
+        try:
+            import ctypes
+            ctypes.windll.user32.MessageBoxW(0, text, APP, 0x10)
+            return
+        except Exception:  # noqa: BLE001
+            pass
+    print(text)
+
+
 def main():
     existing = _running_instance()
-    if existing:
-        open_window(existing)
+    if existing or not _single_instance_lock():
+        open_window(existing or "")
         return 0
     Handler.token = secrets.token_urlsafe(16)
     httpd = None
     for port in PORTS:
         try:
-            httpd = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+            httpd = Server(("127.0.0.1", port), Handler)
             break
         except OSError:
             continue
     if httpd is None:
-        print("Kein freier Port für die Oberfläche gefunden.")
+        hinweis("Kein freier Port für die Oberfläche gefunden (8788-8798 belegt).")
         return 1
-    url = f"http://127.0.0.1:{httpd.server_port}/?k={Handler.token}"
-    _write("runtime.json", {"url": url, "pid": os.getpid()}, private=True)
+    Handler.session = secrets.token_urlsafe(24)
+    start_url = f"http://127.0.0.1:{httpd.server_port}/start?k={Handler.token}"
+    _write("runtime.json", {"url": start_url, "pid": os.getpid()}, private=True)
     threading.Thread(target=refresh_status, daemon=True).start()
-    open_window(url)
+    if not open_window(start_url):
+        hinweis("Es ließ sich kein Fenster öffnen. Bitte im Browser aufrufen:\n"
+                + start_url)
+        return 1
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
         pass
+    finally:
+        try:
+            os.unlink(os.path.join(config_dir(), "runtime.json"))
+        except OSError:
+            pass
     return 0
 
 

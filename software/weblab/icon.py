@@ -83,11 +83,40 @@ def warm():
         png_bytes(size)
 
 
-def ico_bytes(size=256):
-    png = png_bytes(size)
-    head = struct.pack("<HHH", 0, 1, 1)
-    entry = struct.pack("<BBBBHHII", size % 256, size % 256, 0, 0, 1, 32, len(png), 22)
-    return head + entry + png
+def _dib_bytes(size):
+    """Klassischer BMP-Eintrag (unten nach oben, BGRA) — Windows zeigt kleine
+    Symbolgroessen aus PNG-Eintraegen nicht ueberall zuverlaessig."""
+    rows = rgba_rows(size)
+    pixels = bytearray()
+    for row in reversed(rows):
+        for x in range(size):
+            r, g, b, a = row[x * 4:x * 4 + 4]
+            pixels += bytes((b, g, r, a))
+    mask_stride = ((size + 31) // 32) * 4
+    mask = bytes(mask_stride * size)
+    header = struct.pack("<IiiHHIIiiII", 40, size, size * 2, 1, 32, 0,
+                         len(pixels) + len(mask), 0, 0, 0, 0)
+    return header + bytes(pixels) + mask
+
+
+def ico_bytes(sizes=(16, 32, 48, 256)):
+    """Symbol mit mehreren Groessen: Windows skaliert sonst 256 px auf 16 px herunter."""
+    if isinstance(sizes, int):
+        sizes = (sizes,)
+    images = []
+    for size in sizes:
+        if not 1 <= size <= 256:
+            raise ValueError("ICO-Groessen liegen zwischen 1 und 256")
+        images.append((size, png_bytes(size) if size == 256 else _dib_bytes(size)))
+    offset = 6 + 16 * len(images)
+    head = struct.pack("<HHH", 0, 1, len(images))
+    entries, blobs = b"", b""
+    for size, blob in images:
+        entries += struct.pack("<BBBBHHII", size % 256, size % 256, 0, 0, 1, 32,
+                               len(blob), offset)
+        offset += len(blob)
+        blobs += blob
+    return head + entries + blobs
 
 
 def svg():
