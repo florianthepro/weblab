@@ -19,6 +19,7 @@ import sys
 
 SMART = "‘’“”"          # ‘ ’ “ ”
 SCRIPT_RE = re.compile(r"<script>(.*?)</script>", re.S)
+JS_CONST_RE = re.compile(r"^[A-Z_]*JS = \"\"\"(.*?)\"\"\"", re.S | re.M)
 
 
 def fail(msg):
@@ -38,15 +39,15 @@ def main(root):
         except py_compile.PyCompileError as exc:
             rc = fail(f"{name}: Python-Syntaxfehler: {exc}")
         src = open(path, encoding="utf-8").read()
-        for match in SCRIPT_RE.finditer(src):
+        for match in list(SCRIPT_RE.finditer(src)) + list(JS_CONST_RE.finditer(src)):
             block = match.group(1)
             for ch in SMART:
                 pos = block.find(ch)
                 if pos >= 0:
                     line = src[:match.start(1) + pos].count("\n") + 1
                     rc = fail(f"{name}:{line}: typografisches Anführungszeichen "
-                              f"({ch!r}) in einem <script>-Block — bricht das "
-                              f"JavaScript der Seite.")
+                              f"({ch!r}) im JavaScript — bricht die ganze Seite.")
+    rc = _check_js(pydir) or rc
     conn = os.path.join(root, "connectors", "keep")
     if os.path.isdir(conn):
         for name in sorted(os.listdir(conn)):
@@ -61,6 +62,30 @@ def main(root):
     if rc == 0:
         print("Selbsttest ok.")
     return rc
+
+
+def _check_js(pydir):
+    """Ausgeliefertes JavaScript syntaktisch pruefen — nur wenn node vorhanden ist."""
+    import shutil
+    import subprocess
+    import tempfile
+    node = shutil.which("node")
+    if not node:
+        return 0
+    sys.path.insert(0, pydir)
+    try:
+        import ui
+    except Exception as exc:  # noqa: BLE001
+        return fail(f"ui.py laesst sich nicht laden: {exc}")
+    with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False) as fh:
+        fh.write(ui.GLOBAL_JS)
+        path = fh.name
+    try:
+        proc = subprocess.run([node, "--check", path], capture_output=True, text=True, timeout=30)
+    finally:
+        os.unlink(path)
+    return 0 if proc.returncode == 0 else fail(f"GLOBAL_JS ist kein gueltiges JavaScript: "
+                                               f"{proc.stderr.strip()[:200]}")
 
 
 def _check_connector(name, c):

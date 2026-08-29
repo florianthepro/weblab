@@ -27,8 +27,7 @@ def slugify(name):
 def unique_slug(name):
     base = slugify(name)
     slug, index = base, 2
-    # "-db"/"-mgr" sind für die App-eigenen Begleit-Container reserviert
-    # (Datenbank bzw. Verwaltungs-Dashboard — kein Zusammenstoß).
+    # "-db"/"-mgr" gehoeren den Begleit-Containern der App.
     while store.get_app_by_slug(slug) or slug.endswith(("-db", "-mgr")):
         slug = f"{base}-{index}"
         index += 1
@@ -135,9 +134,8 @@ def port_binding(exposure, host_port, container_port, protocol, connector=None):
         host = "0.0.0.0"
     fixed = fixed_ports(connector or {})
     if fixed:
-        # Feste Dienst-Ports (Host==Container), z. B. Mail 25 oder DNS 53.
         bindings = [(f"{host}:{p['port']}", p["port"], p.get("protocol", "tcp")) for p in fixed]
-        # http-Apps brauchen zusätzlich die Weboberfläche am Proxy-Port (nur lokal, Caddy davor).
+        # Weboberflaeche zusaetzlich lokal am Proxy-Port (Caddy davor).
         if (connector or {}).get("http") and container_port not in [p["port"] for p in fixed]:
             bindings.append((f"127.0.0.1:{host_port}", container_port, "tcp"))
         return bindings
@@ -172,12 +170,10 @@ def dns_plan(app, connector, values, server_ip):
             })
         except (KeyError, IndexError, ValueError):
             continue
-    # Web-Apps: ein A-Record auf die eigene Domain.
     if (connector.get("http") and app.get("domain") and server_ip
             and app.get("exposure") == "external"):
         plan.append({"type": "A", "name": app["domain"], "content": server_ip,
                      "priority": None, "comment": f"weblab: {app['name']}", "proxied": False})
-    # Verwaltungs-Subdomain (Dashboard/Dateimanager der App) auf den Server zeigen.
     if app.get("manage_host") and server_ip:
         plan.append({"type": "A", "name": app["manage_host"], "content": server_ip,
                      "priority": None, "comment": f"weblab Verwaltung: {app['name']}",
@@ -199,7 +195,7 @@ def apply_dns(app, connector, values):
     for record in plan:
         match = _zone_match(zones, record["name"])
         if not match:
-            # Zonen-Liste war leer/dünn -> Domain direkt bei Cloudflare auflösen und anlegen.
+            # Zonenliste unvollstaendig: Domain direkt bei Cloudflare aufloesen.
             match = integrations.resolve_zone(accounts, record["name"], zone_cache)
         if not match:
             problems.append(f"{record['name']}: keine passende Domain im Konto")
@@ -212,6 +208,8 @@ def apply_dns(app, connector, values):
             done.append(f"{record['type']} {record['name']}")
         else:
             problems.append(f"{record['name']}: {err}")
+    if done:
+        integrations.invalidate_dns_cache()
     return done, ("; ".join(problems) if problems else None)
 
 
@@ -225,9 +223,8 @@ def _zone_match(zones, hostname):
     return best
 
 
-# Erfassen der Einstellungen + Schreiben der Konfiguration als Einheit: sonst kann
-# ein Aufrufer mit älterem Stand (z. B. ein Request-Thread) NACH dem Watchdog
-# schreiben und dessen frischere Konfiguration still überschreiben.
+# Lesen + Schreiben als Einheit: sonst ueberschreibt ein Aufrufer mit aeltererem
+# Stand die frischere Konfiguration des Watchdogs.
 _sync_lock = threading.Lock()
 
 
@@ -248,8 +245,7 @@ def _sync_proxy_locked():
         if app.get("manage_host"):
             values = app.get("values") or {}
             if manager_active(connector, values) and values.get("manager_port"):
-                # Die Verwaltungs-Domain zeigt auf das dedizierte Dashboard der App
-                # (bekanntes Produkt im eigenen Container), nicht auf das Panel.
+                # Verwaltungs-Domain zeigt auf das Dashboard der App, nicht aufs Panel.
                 routes.append({"domain": app["manage_host"],
                                "port": int(values["manager_port"]),
                                "name": f"{app['name']} (Verwaltung)"})
@@ -258,14 +254,12 @@ def _sync_proxy_locked():
         if not connector:
             continue
         if connector.get("tls_cert"):
-            # Dienste mit eigenem TLS (Mailserver): Caddy soll ihr Zertifikat holen,
-            # auch wenn ihre Domain nicht die Verwaltungs-Domain ist.
+            # Dienste mit eigenem TLS: Caddy holt ihr Zertifikat mit.
             fqdn = container_hostname(connector, app.get("values") or {})
             if fqdn:
                 cert_hosts.append(fqdn)
-        if (not connector.get("http") or not app.get("domain")
-                or app.get("exposure") != "external"):
-            continue        # nur öffentlich erreichbare Apps bekommen eine öffentliche Route
+        if not routed(app, connector):
+            continue
         routes.append({"domain": app["domain"], "port": app["host_port"], "name": app["name"]})
     access = store.get_setting("manage_access", "both")
     domain_ok = store.get_setting("domain_ok", "1") != "0"
@@ -275,6 +269,86 @@ def _sync_proxy_locked():
                                              cert_hosts=cert_hosts, https_ready=https_ready,
                                              server_ip=store.get_setting("server_ip", ""))
 
+
+
+# ---------- Zustand und Adresse einer App ----------
+def companions(app):
+    return [_db_slug(app), _mgr_slug(app)]
+
+
+def data_paths(app):
+    """Alle Datenverzeichnisse der App: eigene Daten, Datenbank, Verwaltungs-Dashboard."""
+    base = app["data_path"]
+    return [host_data_path(app, base)] + [host_data_path(s, base) for s in companions(app)]
+
+
+def app_state(app, snapshot=None):
+    """Zustand inklusive Begleiter — eine App mit toter Datenbank ist nicht 'läuft'."""
+    snap = dockerctl.states() if snapshot is None else snapshot
+    state = snap.get(app["slug"], "missing")
+    if state == "running":
+        for extra in companions(app):
+            if extra in snap and snap[extra] != "running":
+                return "partial"
+    return state
+
+
+def _parse_percent(text):
+    try:
+        return float(str(text).replace("%", "").strip())
+    except (TypeError, ValueError):
+        return 0.0
+
+
+_UNITS = {"b": 1, "kb": 1000, "mb": 1000 ** 2, "gb": 1000 ** 3, "tb": 1000 ** 4,
+          "kib": 1024, "mib": 1024 ** 2, "gib": 1024 ** 3, "tib": 1024 ** 4}
+
+
+def _parse_size(text):
+    match = re.match(r"\s*([\d.]+)\s*([a-zA-Z]+)", str(text or ""))
+    if not match:
+        return 0
+    try:
+        return int(float(match.group(1)) * _UNITS.get(match.group(2).lower(), 1))
+    except ValueError:
+        return 0
+
+
+def app_cpu(app, stats, cores=1):
+    """CPU der App samt Begleiter, bezogen auf den ganzen Server (Docker zählt je Kern)."""
+    total = sum(_parse_percent((stats.get(s) or {}).get("cpu"))
+                for s in [app["slug"]] + companions(app))
+    return f"{total / max(1, cores):.1f} %".replace(".", ",")
+
+
+def app_mem(app, stats):
+    total = sum(_parse_size((stats.get(s) or {}).get("mem", "").split("/")[0])
+                for s in [app["slug"]] + companions(app))
+    return sysinfo.human_bytes(total) if total else "—"
+
+
+def routed(app, connector=None):
+    """Bekommt die App eine öffentliche Route im Reverse-Proxy? (gleiche Bedingung wie sync_proxy)"""
+    connector = connector if connector is not None else catalog.get(app["connector_id"])
+    return bool(connector and connector.get("http") and app.get("domain")
+                and app.get("exposure") == "external")
+
+
+def public_url(app, connector=None):
+    return f"https://{app['domain']}" if routed(app, connector) else ""
+
+
+def local_hint(app):
+    """Wie die App ohne öffentliche Domain erreichbar ist — ehrlich zur echten Bindung."""
+    exposure = app.get("exposure")
+    port = app.get("host_port")
+    if exposure == "internal":
+        return f"127.0.0.1:{port} (nur auf dem Server)"
+    if exposure == "tailscale":
+        return f"{vpn.ts_ip_cached() or 'Tailnet'}:{port} (nur im Tailnet)"
+    if app.get("domain"):
+        return f"{app['domain']} (noch keine Route)"
+    return f"Port {port}"
 
 def _ufw(*args):
     """ufw aufrufen; ein Fehlschlag ist kein Abbruchgrund."""
@@ -310,13 +384,10 @@ def _run_app_container(app, connector):
     gluetun-Ausgang (Mullvad/Proton); sonst normal am gewählten Netz."""
     data_dir = host_data_path(app, app["data_path"])
     if connector.get("data"):
-        # "Frisch" schließt ein leeres Verzeichnis ein: install() legt es vor dem
-        # ersten Containerstart bereits an — sonst griffe data_owner nie.
+        # Leeres Verzeichnis gilt als frisch: install() legt es vorher an.
         fresh = not os.path.isdir(data_dir) or not os.listdir(data_dir)
         os.makedirs(data_dir, exist_ok=True)
-        # Images, die NICHT als root laufen (z. B. Grafana uid 472), können ein
-        # root-eigenes Datenverzeichnis nicht beschreiben. Connector gibt dann
-        # "data_owner": "uid:gid" an — nur beim Anlegen setzen, nie nachträglich.
+        # Nicht-root-Images brauchen ihr Datenverzeichnis; nur beim Anlegen setzen.
         owner = connector.get("data_owner")
         if fresh and owner and ":" in str(owner):
             try:
@@ -335,9 +406,7 @@ def _run_app_container(app, connector):
     ports = port_binding(app["exposure"], app["host_port"], app["container_port"],
                          connector.get("protocol", "tcp"), connector)
     hostname = container_hostname(connector, app["values"])
-    # Dienste mit eigenem TLS (z. B. Mailserver): das von Caddy automatisch geholte
-    # Let's-Encrypt-Zertifikat einbinden. Fehlt es noch, bleibt es beim Selbstsignierten
-    # des Dienstes (kein Ausfall); der Watchdog liefert es nach, sobald Caddy es hat.
+    # Zertifikat von Caddy einbinden; fehlt es, liefert der Watchdog es nach.
     if connector.get("tls_cert") and hostname:
         try:
             certdir = os.path.join(integrations.CERT_DIR, hostname)
@@ -347,8 +416,6 @@ def _run_app_container(app, connector):
             env["SSL_DOMAIN"] = hostname
         except Exception:  # noqa: BLE001 - Zertifikat ist optional, niemals Abbruch
             pass
-    # Feste Zusatz-Mounts und Capabilities aus dem Connector (z. B. Docker-Socket
-    # für Portainer, NET_ADMIN für WireGuard).
     for vol in connector.get("volumes") or []:
         if vol.get("host") and vol.get("container"):
             volumes.append((vol["host"], vol["container"]))
@@ -375,10 +442,7 @@ def _gen_credential(kind):
     return secrets.token_urlsafe(15)
 
 
-# ---------- Per-App-Datenbank (autonom, ohne Felder im Interface) ----------
-# Jede App, deren Connector einen "database"-Block hat, bekommt auf Wunsch ihre
-# eigene MariaDB: eigener Container ohne veröffentlichte Ports, privates Netz nur
-# für App+DB, generierte Zugangsdaten. Nichts davon taucht im Interface auf.
+# ---------- Per-App-Datenbank: eigener Container, privates Netz, erzeugte Zugaenge ----------
 DB_IMAGE = "mariadb:11.4"          # LTS — stabilste gepflegte Serie
 DB_RAM_MB = 512
 DB_LABELS = {"mariadb": "MariaDB (empfohlen)", "sqlite": "SQLite (einfach)"}
@@ -452,9 +516,8 @@ def _db_env_for_app(connector, app):
 
 def _wait_for_db(dbslug, values, attempts=45, delay=2):
     import time
-    # Ausdrücklich über TCP prüfen: während der Erst-Initialisierung startet MariaDB
-    # kurz mit --skip-networking — der Unix-Socket antwortet dann schon, obwohl die
-    # App per Netzwerk noch nicht verbinden könnte (App würde zu früh starten).
+    # Ueber TCP pruefen: bei der Erst-Initialisierung antwortet der Socket schon,
+    # waehrend MariaDB noch mit --skip-networking laeuft.
     probe = (f"mariadb --protocol=TCP -h 127.0.0.1 -u{shlex.quote(values['db_user'])} "
              f"-p{shlex.quote(values['db_password'])} "
              f"-e 'SELECT 1' {shlex.quote(values['db_name'])} >/dev/null 2>&1 "
@@ -486,8 +549,7 @@ def ensure_db(app, connector):
     had_creds = bool(values.get("db_password"))
     prepare_db_values(connector, values, app["slug"], values.get("database"))
     if not had_creds and app.get("id"):
-        # Neu erzeugte Zugangsdaten sofort speichern — sonst würde jeder Neustart
-        # neue erzeugen und die App käme nie mehr an ihre Datenbank.
+        # Sofort speichern, sonst erzeugt jeder Neustart andere Zugangsdaten.
         store.update_app(app["id"], {"values_json": _dumps(values)})
     net = _db_network(app)
     try:
@@ -505,9 +567,8 @@ def ensure_db(app, connector):
         return dbslug
     data_dir = host_data_path(dbslug, app["data_path"])
     if not had_creds and os.path.isdir(data_dir) and os.listdir(data_dir):
-        # Rest einer früheren Installation: MariaDB würde die neuen Zugangsdaten
-        # bei nicht-leerem Datenverzeichnis stillschweigend ignorieren (Env greift
-        # nur bei Erst-Initialisierung). Alten Stand beiseitelegen, nicht löschen.
+        # MariaDB ignoriert neue Zugangsdaten bei nicht-leerem Datenverzeichnis:
+        # alten Stand beiseitelegen statt loeschen.
         import time
         os.replace(data_dir, f"{data_dir}.alt-{int(time.time())}")
     os.makedirs(data_dir, exist_ok=True)
@@ -524,11 +585,7 @@ def ensure_db(app, connector):
     return dbslug
 
 
-# ---------- Verwaltungs-Dashboard je App (bekanntes Produkt, eigene Domain) ----------
-# Website-Apps (Apache/Nginx) verwalten ihre Dateien NICHT im Panel: der Connector
-# gibt mit einem "manager"-Block ein bekanntes, sicheres Standardprodukt (SFTPGo)
-# vor, das als eigener Container nur an 127.0.0.1 läuft — Caddy legt es auf die
-# Verwaltungs-Domain der App. Zugangsdaten werden erzeugt und nie abgefragt.
+# ---------- Verwaltungs-Dashboard je App (eigener Container an 127.0.0.1) ----------
 MGR_RAM_MB = 256
 
 
@@ -692,7 +749,6 @@ def install(connector_id, form, seed_dir=None, extra_env=None, progress=None):
         if key in form or field.get("type") == "bool":
             values[key] = coerce(field, form.get(key))
     for field in catalog.all_fields(connector):
-        # Zugangsdaten (admin/Passwort) automatisch erzeugen, wenn nichts angegeben wurde.
         if field.get("auto") and not str(values.get(field["key"]) or "").strip():
             values[field["key"]] = _gen_credential(field["auto"])
     for field in connector["fields"].get("required", []):
@@ -701,7 +757,6 @@ def install(connector_id, form, seed_dir=None, extra_env=None, progress=None):
 
     name = (form.get("name") or connector["name"]).strip()
     slug = unique_slug(name)
-    # App-eigene Datenbank: Auswahl übernehmen, Zugangsdaten unsichtbar erzeugen.
     prepare_db_values(connector, values, slug, form.get("database"))
     if db_choice(connector, values) == "mariadb" and (form.get("egress_id") or "").strip():
         raise ValueError("Ein VPN-Ausgang ist mit einer eigenen Datenbank nicht kombinierbar.")
@@ -711,19 +766,15 @@ def install(connector_id, form, seed_dir=None, extra_env=None, progress=None):
     if fixed and not connector.get("http"):
         host_port = fixed[0]["port"]          # Dienste-Ports stehen fest (z. B. Mail 25)
     else:
-        # http-Apps (auch mit festen Dienst-Ports) bekommen einen freien Proxy-Port.
         host_port = form.get("host_port")
         host_port = int(host_port) if str(host_port or "").isdigit() else \
             sysinfo.free_port(taken=store.used_host_ports())
-    # Verwaltungs-Dashboard (bekanntes Produkt): Zugangsdaten + lokaler Port,
-    # komplett im Hintergrund — nichts davon taucht im Formular auf.
     prepare_manager_values(connector, values, extra_taken={host_port})
 
     data_root = form.get("data_path") or "/var/lib/weblab/data"
     data_dir = host_data_path(slug, data_root)
     os.makedirs(data_dir, exist_ok=True)
     if seed_dir and os.path.isdir(seed_dir):
-        # Backup der Alt-Installation vor dem ersten Start einspielen.
         shutil.copytree(seed_dir, data_dir, symlinks=True, dirs_exist_ok=True)
 
     manage_domain = store.get_setting("manage_domain", "")
@@ -732,8 +783,7 @@ def install(connector_id, form, seed_dir=None, extra_env=None, progress=None):
     app_domain = (form.get("domain") or "").strip().lower()
     app_domain = app_domain.split("://")[-1].split("/")[0].split(":")[0].strip(". ")
 
-    # Mit eigener Datenbank laufen App+DB in einem privaten App-Netz (Docker-DNS),
-    # sofern kein eigenes Subnetz gewählt wurde. Die DB veröffentlicht keine Ports.
+    # App+DB brauchen ein Netz mit Container-DNS; der Standard "bridge" hat keins.
     network = form.get("network") or "bridge"
     if db_choice(connector, values) == "mariadb" and network in ("", "bridge"):
         network = app_network(slug)
@@ -762,7 +812,6 @@ def install(connector_id, form, seed_dir=None, extra_env=None, progress=None):
         progress(40, "Datenbank wird eingerichtet …")
     _run_app_container(app, connector)
     progress(70, "App wird konfiguriert …")
-    # Der Container läuft bereits — Fehler hier werden gemeldet, nicht geworfen.
     app["warnings"] = []
     def dns_step():
         done, problem = apply_dns(app, connector, values)
@@ -825,7 +874,6 @@ def write_init_files(app, connector, values):
         fields["app_name"] = app["name"]
         fields["domain"] = app.get("domain") or ""
         if rel.lower().endswith((".html", ".htm", ".php")):
-            # Werte landen in Web-Dateien -> maskieren.
             fields = {k: html.escape(str(v), quote=True) if isinstance(v, str) else v
                       for k, v in fields.items()}
         try:
@@ -835,12 +883,10 @@ def write_init_files(app, connector, values):
         with open(target, "w", encoding="utf-8") as fh:
             fh.write(content)
         os.chmod(target, 0o644)
-        # Läuft das Dateimanagement der App unter einer anderen uid (data_owner),
-        # gehören ihm auch die Startdateien — sonst wäre index.html unbearbeitbar.
+        # Startdateien gehoeren dem data_owner, sonst nicht bearbeitbar.
         _chown_spec(target, connector.get("data_owner"))
         written.append(rel)
     if written:
-        # Webserver-Container laufen oft als www-data: Verzeichnis lesbar machen.
         os.chmod(base, 0o755)
     return written
 
@@ -938,8 +984,7 @@ def update(app_id, form, section="basic", allow_keys=None):
     app = store.get_app(app_id)
 
     if section == "basic":
-        # Datenlaufwerk gewechselt: die App-eigene Datenbank zieht mit um (gleiche
-        # Zugangsdaten) — sonst zeigte die frisch aufgesetzte App auf eine alte DB.
+        # Datenlaufwerk gewechselt: die Datenbank zieht mit um.
         if (app["data_path"] != old_data_path
                 and db_choice(connector, app["values"]) == "mariadb"):
             dockerctl.remove(_db_slug(app), missing_ok=True)
@@ -948,8 +993,7 @@ def update(app_id, form, section="basic", allow_keys=None):
             if os.path.isdir(old_dir) and not os.path.exists(new_dir):
                 os.makedirs(os.path.dirname(new_dir), exist_ok=True)
                 shutil.move(old_dir, new_dir)
-        # Das Verwaltungs-Dashboard zieht genauso mit um bzw. wird neu erstellt,
-        # damit seine Mounts (Docroot!) auf den aktuellen Pfad zeigen.
+        # Dashboard neu erstellen, damit sein Docroot-Mount stimmt.
         if manager_active(connector, app["values"]):
             dockerctl.remove(_mgr_slug(app), missing_ok=True)
             if app["data_path"] != old_data_path:
@@ -958,9 +1002,8 @@ def update(app_id, form, section="basic", allow_keys=None):
                 if os.path.isdir(old_dir) and not os.path.exists(new_dir):
                     os.makedirs(os.path.dirname(new_dir), exist_ok=True)
                     shutil.move(old_dir, new_dir)
-        # Port/Ressourcen/Netzwerk erfordern einen neuen Container.
         _run_app_container(app, connector)
-        # Konfigdateien im Container gehen beim Neuerstellen verloren.
+        # Der neue Container hat die Konfigdateien nicht mehr.
         write_init_files(app, connector, app["values"])
         apply_config_files(app, connector, app["values"])
         try:
@@ -998,6 +1041,7 @@ def _delete_app_dns(app):
         for rec in records:
             if rec.get("name") == host and rec.get("type") in ("A", "AAAA", "CNAME"):
                 cf.delete_record(match["name"], rec["id"])
+                integrations.invalidate_dns_cache()
 
 
 def remove(app_id, delete_data=False, delete_dns=False):

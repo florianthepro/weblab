@@ -5,32 +5,41 @@ import json
 import os
 import secrets
 import sqlite3
+import threading
 import time
 
 DB_PATH = os.environ.get("WEBLAB_DB", "/var/lib/weblab/weblab.db")
 
 
+_LOCAL = threading.local()
+
+
+def _conn():
+    """Eine Verbindung je Thread — Aufbau samt PRAGMAs kostete sonst bei jedem Aufruf."""
+    conn = getattr(_LOCAL, "conn", None)
+    if conn is None or getattr(_LOCAL, "path", "") != DB_PATH:
+        os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+        conn = sqlite3.connect(DB_PATH, timeout=15, check_same_thread=False)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA busy_timeout=8000")
+        conn.execute("PRAGMA foreign_keys=ON")
+        try:
+            conn.execute("PRAGMA journal_mode=WAL")
+        except sqlite3.OperationalError:
+            pass
+        _LOCAL.conn, _LOCAL.path = conn, DB_PATH
+    return conn
+
+
 @contextlib.contextmanager
 def connect():
-    """Verbindung als Kontextmanager: committet bei Erfolg, schließt immer.
-    busy_timeout lässt parallele Zugriffe warten statt zu scheitern (Threading-Server)."""
-    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
-    conn = sqlite3.connect(DB_PATH, timeout=15)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA busy_timeout=8000")
-    conn.execute("PRAGMA foreign_keys=ON")
-    try:
-        conn.execute("PRAGMA journal_mode=WAL")
-    except sqlite3.OperationalError:
-        pass
+    conn = _conn()
     try:
         yield conn
         conn.commit()
     except Exception:
         conn.rollback()
         raise
-    finally:
-        conn.close()
 
 
 SCHEMA = """
@@ -128,19 +137,43 @@ def _set(conn, key, value):
     )
 
 
-def get_setting(key, default=None):
+_SETTINGS = {"data": None, "t": 0.0, "gen": 0}
+_SETTINGS_LOCK = threading.Lock()
+SETTINGS_TTL = 2.0        # kurz genug, damit Aenderungen von aussen sichtbar bleiben
+
+
+def _settings_map():
+    with _SETTINGS_LOCK:
+        fresh = (_SETTINGS["data"] is not None
+                 and time.monotonic() - _SETTINGS["t"] < SETTINGS_TTL)
+        if fresh:
+            return _SETTINGS["data"]
+    with _SETTINGS_LOCK:
+        gen = _SETTINGS["gen"]
     with connect() as conn:
-        return _get(conn, key, default)
+        data = {r["key"]: r["value"] for r in conn.execute("SELECT key,value FROM settings")}
+    with _SETTINGS_LOCK:
+        if gen == _SETTINGS["gen"]:      # zwischenzeitlicher Schreibzugriff schlaegt den Lesestand
+            _SETTINGS.update({"data": data, "t": time.monotonic()})
+        return _SETTINGS["data"] if _SETTINGS["data"] is not None else data
+
+
+def get_setting(key, default=None):
+    value = _settings_map().get(key)
+    return default if value is None else value
 
 
 def set_setting(key, value):
     with connect() as conn:
         _set(conn, key, value)
+    with _SETTINGS_LOCK:
+        _SETTINGS["gen"] += 1
+        if _SETTINGS["data"] is not None:
+            _SETTINGS["data"][key] = str(value)
 
 
 def all_settings():
-    with connect() as conn:
-        return {r["key"]: r["value"] for r in conn.execute("SELECT key,value FROM settings")}
+    return dict(_settings_map())
 
 
 def is_setup_done():

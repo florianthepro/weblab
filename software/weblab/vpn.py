@@ -1,6 +1,8 @@
 """VPN: privater Zugriff über Tailscale (eingehend) und ausgehende Tunnel
 (Mullvad/ProtonVPN via gluetun). Alles nur aktiv, wenn eine App es ausdrücklich nutzt."""
 import json
+import threading
+import time
 import subprocess
 
 import dockerctl
@@ -38,6 +40,7 @@ def ts_up(authkey, hostname="weblab"):
     _run(["systemctl", "enable", "--now", "tailscaled"], timeout=30)
     result = _run(["tailscale", "up", "--authkey", authkey, "--hostname", hostname,
                    "--accept-dns=false"], timeout=60)
+    ts_invalidate()
     if result and result.returncode == 0:
         return True, None
     return False, (result.stderr.strip() if result else "tailscale up fehlgeschlagen")
@@ -45,17 +48,53 @@ def ts_up(authkey, hostname="weblab"):
 
 def ts_down():
     _run(["tailscale", "down"], timeout=30)
+    ts_invalidate()
     return True
 
 
-def ts_ip():
+_IP_CACHE = {"t": 0.0, "value": ""}
+
+
+def ts_ip(max_age=60.0):
+    if _IP_CACHE["value"] and time.monotonic() - _IP_CACHE["t"] < max_age:
+        return _IP_CACHE["value"]
     result = _run(["tailscale", "ip", "-4"], timeout=15)
-    if result and result.returncode == 0:
-        return result.stdout.strip().splitlines()[0] if result.stdout.strip() else ""
-    return ""
+    value = ""
+    if result and result.returncode == 0 and result.stdout.strip():
+        value = result.stdout.strip().splitlines()[0]
+    _IP_CACHE.update({"t": time.monotonic(), "value": value})
+    return value
 
 
-def ts_status():
+def ts_ip_cached():
+    """Nur der bekannte Wert — nie ein Prozessstart auf dem Anzeigeweg."""
+    return _IP_CACHE["value"]
+
+
+_TS_CACHE = {"t": 0.0, "value": None}
+_TS_LOCK = threading.Lock()
+
+
+def ts_invalidate():
+    """Nur als veraltet markieren — der letzte bekannte Wert bleibt für die Anzeige."""
+    with _TS_LOCK:
+        _TS_CACHE["t"] = 0.0
+    _IP_CACHE["t"] = 0.0
+
+
+def ts_status(max_age=30.0):
+    with _TS_LOCK:
+        if _TS_CACHE["value"] is not None and time.monotonic() - _TS_CACHE["t"] < max_age:
+            return _TS_CACHE["value"]
+    value = _ts_status_uncached()
+    with _TS_LOCK:
+        _TS_CACHE.update({"t": time.monotonic(), "value": value})
+    if value.get("ip"):
+        _IP_CACHE.update({"t": time.monotonic(), "value": value["ip"]})
+    return value
+
+
+def _ts_status_uncached():
     """{'connected':bool,'ip':str,'hostname':str,'tailnet':str}."""
     if not ts_installed():
         return {"connected": False, "installed": False, "ip": "", "hostname": "", "tailnet": ""}

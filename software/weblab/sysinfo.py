@@ -5,9 +5,33 @@ import re
 import shutil
 import socket
 import subprocess
+import threading
 import time
 
-_prev_cpu = {"total": 0, "idle": 0, "ts": 0}
+_prev_cpu = {"total": 0, "idle": 0, "ts": 0.0, "value": 0.0}
+_CPU_LOCK = threading.Lock()
+_MEMO = {}
+_MEMO_LOCK = threading.Lock()
+
+
+def _memo(seconds):
+    """Ergebnis fuer kurze Zeit behalten — df/lsblk/ss laufen sonst je Seitenaufruf neu."""
+    def wrap(fn):
+        def call(*args):
+            key = (fn.__name__, args)
+            now = time.monotonic()
+            with _MEMO_LOCK:
+                hit = _MEMO.get(key)
+                if hit and (seconds is None or now - hit[0] < seconds):
+                    return hit[1]
+            value = fn(*args)
+            with _MEMO_LOCK:
+                _MEMO[key] = (now, value)
+            return value
+        call.__name__ = fn.__name__
+        call.__doc__ = fn.__doc__
+        return call
+    return wrap
 
 
 def _sh(cmd, timeout=20):
@@ -18,23 +42,28 @@ def _sh(cmd, timeout=20):
         return ""
 
 
-def cpu_percent():
-    """CPU-Auslastung seit dem letzten Aufruf (Delta aus /proc/stat)."""
-    try:
-        with open("/proc/stat", encoding="utf-8") as fh:
-            parts = fh.readline().split()
-    except OSError:
-        return 0.0
-    values = [int(v) for v in parts[1:] if v.isdigit()]
-    if len(values) < 4:
-        return 0.0
-    total, idle = sum(values), values[3] + (values[4] if len(values) > 4 else 0)
-    dt_total = total - _prev_cpu["total"]
-    dt_idle = idle - _prev_cpu["idle"]
-    _prev_cpu.update({"total": total, "idle": idle, "ts": time.time()})
-    if dt_total <= 0:
-        return 0.0
-    return round(max(0.0, min(100.0, (1 - dt_idle / dt_total) * 100)), 1)
+def cpu_percent(min_window=1.0):
+    """CPU-Auslastung aus /proc/stat. Messfenster mindestens min_window Sekunden —
+    zwei schnell aufeinanderfolgende Aufrufe lieferten sonst Zufallswerte."""
+    now = time.monotonic()
+    with _CPU_LOCK:
+        if now - _prev_cpu["ts"] < min_window:
+            return _prev_cpu["value"]
+        try:
+            with open("/proc/stat", encoding="utf-8") as fh:
+                parts = fh.readline().split()
+        except OSError:
+            return _prev_cpu["value"]
+        values = [int(v) for v in parts[1:] if v.isdigit()]
+        if len(values) < 4:
+            return _prev_cpu["value"]
+        total, idle = sum(values), values[3] + (values[4] if len(values) > 4 else 0)
+        dt_total = total - _prev_cpu["total"]
+        dt_idle = idle - _prev_cpu["idle"]
+        _prev_cpu.update({"total": total, "idle": idle, "ts": now})
+        if dt_total > 0:
+            _prev_cpu["value"] = round(max(0.0, min(100.0, (1 - dt_idle / dt_total) * 100)), 1)
+        return _prev_cpu["value"]
 
 
 def meminfo():
@@ -72,14 +101,17 @@ def uptime_seconds():
         return 0.0
 
 
+@_memo(None)
 def cpu_count():
     return os.cpu_count() or 1
 
 
+@_memo(None)
 def hostname():
     return socket.gethostname()
 
 
+@_memo(None)
 def os_pretty():
     try:
         with open("/etc/os-release", encoding="utf-8") as fh:
@@ -91,10 +123,12 @@ def os_pretty():
     return "Linux"
 
 
+@_memo(None)
 def kernel():
     return _sh(["uname", "-r"]).strip()
 
 
+@_memo(8)
 def mounts():
     """Beschreibbare Dateisysteme mit Belegung — Basis für „Datenlaufwerk“."""
     out = _sh(["df", "-PB1", "-x", "tmpfs", "-x", "devtmpfs", "-x", "squashfs", "-x", "overlay"])
@@ -116,6 +150,7 @@ def mounts():
     return rows
 
 
+@_memo(8)
 def disks():
     """Blockgeräte (lsblk) — physische Sicht auf die Laufwerke."""
     out = _sh(["lsblk", "-J", "-b", "-o", "NAME,SIZE,TYPE,MOUNTPOINT,MODEL,FSTYPE"])
@@ -198,6 +233,7 @@ def data_locations():
     return locations
 
 
+@_memo(8)
 def interfaces():
     out = _sh(["ip", "-j", "addr"])
     try:
@@ -220,6 +256,15 @@ def interfaces():
 _PORT_RE = re.compile(r'users:\(\("([^"]+)"')
 
 
+def _loopback(host):
+    import ipaddress
+    try:
+        return ipaddress.ip_address(host.strip("[]").split("%")[0]).is_loopback
+    except ValueError:
+        return False
+
+
+@_memo(8)
 def listening_ports():
     """Offene (lauschende) Ports inkl. Prozess — TCP und UDP."""
     rows = []
@@ -229,15 +274,14 @@ def listening_ports():
             parts = line.split()
             if len(parts) < 5:
                 continue
-            local = parts[4]
-            host, _, port = local.rpartition(":")
+            host, _, port = parts[3].rpartition(":")
             if not port.isdigit():
                 continue
             match = _PORT_RE.search(line)
             rows.append({
                 "proto": proto, "address": host or "*", "port": int(port),
                 "process": match.group(1) if match else "",
-                "scope": "intern" if host.strip("[]") in ("127.0.0.1", "::1") else "extern",
+                "scope": "intern" if _loopback(host) else "extern",
             })
     rows.sort(key=lambda r: (r["port"], r["proto"]))
     # Doppelte (IPv4+IPv6 auf gleichem Port/Prozess) zusammenfassen
@@ -280,12 +324,14 @@ def service_active(name):
 
 
 def human_bytes(num):
+    """Binaer gerechnet und binaer benannt (KiB/MiB/GiB) — df und docker zaehlen genauso."""
     num = float(num or 0)
-    for unit in ("B", "KB", "MB", "GB", "TB", "PB"):
+    for unit in ("B", "KiB", "MiB", "GiB", "TiB", "PiB"):
         if abs(num) < 1024:
-            return f"{num:.0f} {unit}" if unit == "B" else f"{num:.1f} {unit}"
+            text = f"{num:.0f} {unit}" if unit == "B" else f"{num:.1f} {unit}"
+            return text.replace(".", ",")
         num /= 1024
-    return f"{num:.1f} EB"
+    return f"{num:.1f} EiB".replace(".", ",")
 
 
 def human_uptime(seconds):

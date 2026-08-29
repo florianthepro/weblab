@@ -2,6 +2,8 @@
 import json
 import shlex
 import subprocess
+import threading
+import time
 
 PREFIX = "weblab-"
 LABEL = "weblab.app"
@@ -20,12 +22,35 @@ def _run(args, timeout=180, check=True, stdin=None):
     return proc.stdout
 
 
+_AVAIL = {"value": None, "ts": 0.0}
+_STATES = {"map": {}, "ts": 0.0, "gen": 0}
+_STATS = {"map": {}, "ts": 0.0, "gen": 0}
+_CACHE_LOCK = threading.Lock()
+STATE_TTL = 2.0
+STATS_TTL = 6.0
+
+
 def available():
+    now = time.monotonic()
+    with _CACHE_LOCK:
+        age = now - _AVAIL["ts"]
+        if _AVAIL["value"] is True and age < 60 or _AVAIL["value"] is False and age < 5:
+            return _AVAIL["value"]
     try:
         _run(["version", "--format", "{{.Server.Version}}"], timeout=15)
-        return True
+        value = True
     except Exception:
-        return False
+        value = False
+    with _CACHE_LOCK:
+        _AVAIL.update({"value": value, "ts": now})
+    return value
+
+
+def _invalidate():
+    with _CACHE_LOCK:
+        _STATES["ts"] = _STATS["ts"] = 0.0
+        _STATES["gen"] += 1
+        _STATS["gen"] += 1
 
 
 def container_name(slug):
@@ -34,7 +59,8 @@ def container_name(slug):
 
 def ps():
     """Alle weblab-Container mit Status."""
-    out = _run(["ps", "-a", "--filter", f"label={LABEL}", "--format", "{{json .}}"], check=False)
+    out = _run(["ps", "-a", "--filter", f"label={LABEL}", "--format", "{{json .}}"],
+               check=False, timeout=10)
     items = []
     for line in out.splitlines():
         line = line.strip()
@@ -47,12 +73,38 @@ def ps():
 
 
 def status(slug):
-    out = _run(["inspect", "-f", "{{.State.Status}}", container_name(slug)], check=False).strip()
+    """Exakter Zustand eines Containers (für Steuerungslogik, nie aus dem Cache)."""
+    out = _run(["inspect", "-f", "{{.State.Status}}", container_name(slug)],
+               check=False, timeout=10).strip()
     return out or "missing"
 
 
-def stats():
-    """CPU/RAM-Verbrauch je laufendem weblab-Container."""
+def states(max_age=STATE_TTL):
+    """slug -> Zustand aus EINEM 'docker ps -a' — für Anzeigen statt N Einzelabfragen."""
+    now = time.monotonic()
+    with _CACHE_LOCK:
+        if now - _STATES["ts"] <= max_age:
+            return dict(_STATES["map"])
+        gen = _STATES["gen"]
+    data = {}
+    if available():
+        for row in ps():
+            name = row.get("Names") or row.get("Name") or ""
+            if name.startswith(PREFIX):
+                data[name[len(PREFIX):]] = (row.get("State") or "").lower() or "missing"
+    with _CACHE_LOCK:
+        if gen == _STATES["gen"]:      # zwischenzeitliche Aktion schlaegt die alte Abfrage
+            _STATES.update({"map": data, "ts": time.monotonic()})
+    return dict(data)
+
+
+def stats(max_age=STATS_TTL):
+    """CPU/RAM-Verbrauch je laufendem weblab-Container ('docker stats' braucht ~1-2 s)."""
+    now = time.monotonic()
+    with _CACHE_LOCK:
+        if now - _STATS["ts"] <= max_age:
+            return dict(_STATS["map"])
+        gen = _STATS["gen"]
     out = _run(["stats", "--no-stream", "--format", "{{json .}}"], check=False, timeout=45)
     result = {}
     for line in out.splitlines():
@@ -72,6 +124,9 @@ def stats():
                 "net": row.get("NetIO", ""),
                 "block": row.get("BlockIO", ""),
             }
+    with _CACHE_LOCK:
+        if gen == _STATS["gen"]:
+            _STATS.update({"map": result, "ts": time.monotonic()})
     return result
 
 
@@ -108,23 +163,38 @@ def run_container(slug, image, env=None, ports=None, volumes=None, cpu=None,
     if network and network != "bridge" and not network_mode:
         args += ["--network", network]
     args.append(image)
-    return _run(args, timeout=600).strip()
+    try:
+        return _run(args, timeout=600).strip()
+    finally:
+        _invalidate()
 
 
 def start(slug):
-    return _run(["start", container_name(slug)]).strip()
+    try:
+        return _run(["start", container_name(slug)]).strip()
+    finally:
+        _invalidate()
 
 
 def stop(slug):
-    return _run(["stop", "-t", "20", container_name(slug)], timeout=60).strip()
+    try:
+        return _run(["stop", "-t", "20", container_name(slug)], timeout=60).strip()
+    finally:
+        _invalidate()
 
 
 def restart(slug):
-    return _run(["restart", "-t", "20", container_name(slug)], timeout=90).strip()
+    try:
+        return _run(["restart", "-t", "20", container_name(slug)], timeout=90).strip()
+    finally:
+        _invalidate()
 
 
 def remove(slug, missing_ok=False):
-    return _run(["rm", "-f", container_name(slug)], check=not missing_ok, timeout=90).strip()
+    try:
+        return _run(["rm", "-f", container_name(slug)], check=not missing_ok, timeout=90).strip()
+    finally:
+        _invalidate()
 
 
 def logs(slug, tail=200):
@@ -160,7 +230,7 @@ def set_file_line(slug, path, prefix, value):
 
 # ---------- Netzwerke / Subnetze ----------
 def networks():
-    out = _run(["network", "ls", "--format", "{{json .}}"], check=False)
+    out = _run(["network", "ls", "--format", "{{json .}}"], check=False, timeout=10)
     items = []
     for line in out.splitlines():
         if line.strip():
@@ -171,12 +241,15 @@ def networks():
     return items
 
 
-def network_details(name):
-    out = _run(["network", "inspect", name], check=False, timeout=30)
+def network_map(names=None):
+    """Alle Netze in EINEM inspect-Aufruf (statt einem pro Netz)."""
+    names = names or [n["Name"] for n in networks()]
+    if not names:
+        return {}
+    out = _run(["network", "inspect", *names], check=False, timeout=10)
     try:
-        data = json.loads(out)
-        return data[0] if data else {}
-    except (json.JSONDecodeError, IndexError):
+        return {item.get("Name"): item for item in json.loads(out)}
+    except (json.JSONDecodeError, TypeError):
         return {}
 
 

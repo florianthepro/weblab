@@ -683,6 +683,29 @@ def cached_records(token, zone_name):
     return recs
 
 
+_VERIFY_CACHE = {}
+
+
+def verify_cached(token, max_age=300):
+    """Token-Pruefung zwischenspeichern — die Netzwerkseite fragte sonst je Aufruf neu."""
+    hit = _VERIFY_CACHE.get(token)
+    if hit and time.time() - hit[0] < max_age:
+        return hit[1]
+    result = Cloudflare(token).verify()
+    _VERIFY_CACHE[token] = (time.time(), result)
+    return result
+
+
+def zone_count(token, max_age=300):
+    key = ("zones", token)
+    hit = _VERIFY_CACHE.get(key)
+    if hit and time.time() - hit[0] < max_age:
+        return hit[1]
+    count = len(Cloudflare(token).zones())
+    _VERIFY_CACHE[key] = (time.time(), count)
+    return count
+
+
 def all_zones(accounts):
     """Zonen aller Konten: [{name, token, account_label, proxied_default}].
     Kurz zwischengespeichert, damit die Netzwerk-Seite nicht bei jedem Aufruf alle

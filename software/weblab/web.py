@@ -16,6 +16,7 @@ import apps as appsvc
 import catalog
 import dockerctl
 import files
+import icon
 import integrations
 import perms
 import store
@@ -29,22 +30,18 @@ PORT = int(os.environ.get("WEBLAB_PORT", "8099"))
 COOKIE = "weblab_session"
 EXPOSURE_LABELS = {"external": "Extern", "internal": "Intern", "specific": "Spezifisch",
                    "tailscale": "Tailscale (privat)"}
-LOCATION_LABELS = {"docker": "Docker", "device": "Gerät"}
 SESSION_MAX_AGE = 12 * 3600
 
-# Fortschritt des Setup-Assistenten
 SETUP_STATE = {"running": False, "percent": 0, "step": "", "done": False, "error": None,
                "redirect": "/login", "domain_url": ""}
 
-# Laufende Cloudflare-Anmeldung (OAuth)
 CF_LOGIN = {"state": "", "verifier": "", "client_id": "", "client_secret": "",
             "redirect_uri": ""}
 
-# Neue/aktualisierte Connectoren erkennen
 CONNECTOR_NEW_DAYS = 14
 
 
-def connector_news():
+def connector_news(write=True):
     """IDs von Connectoren, die seit Kurzem neu oder in neuer Version da sind."""
     try:
         known = json.loads(store.get_setting("connectors_seen", "") or "{}")
@@ -59,13 +56,52 @@ def connector_news():
     for key in [k for k in known if k not in current]:
         del known[key]
         changed = True
-    if changed:
+    if changed and write:
         store.set_setting("connectors_seen", json.dumps(known))
     return {k.split("@")[0] for k, ts in known.items()
             if ts and now - ts < CONNECTOR_NEW_DAYS * 86400}
 
 
-# Sitzungen (signierte Cookies) + CSRF
+# App-Groessen: 'du' laeuft im Hintergrund, die Seite zeigt den letzten Stand.
+APP_SIZES = {}
+_SIZE_LOCK = threading.Lock()
+
+
+def app_size(app):
+    with _SIZE_LOCK:
+        return APP_SIZES.get(app["slug"], (None, 0.0))
+
+
+def measure_app_size(app):
+    total, ok = 0, True
+    for path in appsvc.data_paths(app):
+        if not os.path.isdir(path):
+            continue
+        try:
+            out = subprocess.run(["du", "-sB1", path], capture_output=True, text=True, timeout=120)
+            if out.returncode == 0:
+                total += int(out.stdout.split()[0])
+            else:
+                ok = False
+        except (OSError, ValueError, subprocess.SubprocessError):
+            ok = False
+    if not ok:
+        return          # lieber der alte Wert als eine erfundene Null
+    with _SIZE_LOCK:
+        APP_SIZES[app["slug"]] = (total, time.time())
+
+
+def measure_sizes(limit=None):
+    """Aelteste Messungen zuerst; limit begrenzt eine Runde."""
+    apps_list = sorted(store.list_apps(), key=lambda a: app_size(a)[1])
+    live = {a["slug"] for a in apps_list}
+    with _SIZE_LOCK:
+        for slug in [s for s in APP_SIZES if s not in live]:
+            del APP_SIZES[slug]
+    for app in apps_list[:limit] if limit else apps_list:
+        measure_app_size(app)
+
+
 _SECRET = None
 
 
@@ -105,7 +141,6 @@ def csrf_for(session):
     return hmac.new(_secret(), f"csrf:{session.get('sid', '')}".encode(), sha256).hexdigest()[:32]
 
 
-# Setup-Ablauf (Hintergrund, damit der Fortschritt abfragbar bleibt)
 def _setup_update(**kw):
     """Fortschritt im Speicher UND in der Datenbank festhalten — übersteht so einen
     Dienst-Neustart mitten im Setup (z. B. durch den Auto-Update-Timer): die
@@ -127,9 +162,7 @@ def run_setup(username, password, domain, access="both", cf_email="", cf_key="")
             existing = next((u for u in store.list_users()
                              if u.get("username") == username), None)
             if existing:
-                # Setup-Wiederholung (nach Abbruch/Fehler): die JETZT eingegebenen
-                # Zugangsdaten gelten — sonst bliebe still das alte Passwort aktiv
-                # und die Anmeldung schlüge unerklärlich fehl.
+                # Wiederholtes Setup: die jetzt eingegebenen Zugangsdaten gelten.
                 store.set_password(existing["id"], password)
             else:
                 store.create_user(username, password)
@@ -172,9 +205,7 @@ def run_setup(username, password, domain, access="both", cf_email="", cf_key="")
             store.set_setting("docker_ok", "1" if dockerctl.available() else "0")
 
             _setup_update(**{"percent": 95, "step": "Zertifikat wird ausgestellt"})
-            # Bei einem verknüpften Cloudflare-Konto sofort sicherstellen, dass die
-            # Verwaltungs-Domain NICHT proxied ist — sonst blockiert die orange Wolke
-            # die Let's-Encrypt-Prüfung und wir landen in 521.
+            # Die orange Wolke blockiert die Let's-Encrypt-Pruefung (521).
             if domain and access in ("domain", "both"):
                 try:
                     integrations.ensure_unproxied(store.cf_accounts(), domain, server_ip)
@@ -182,26 +213,21 @@ def run_setup(username, password, domain, access="both", cf_email="", cf_key="")
                     pass
             time.sleep(3)
             store.set_setting("setup_done", "1")
-            # Immer funktionierender Weg zur Anmeldung: relativer Pfad bleibt auf dem
-            # aktuellen Host (die IP über HTTP) — kein Warten aufs Zertifikat, kein
-            # Hängen. Ist eine Domain gewünscht, wechselt die Fortschrittsseite erst
-            # dann auf https://domain, wenn Caddy das Zertifikat wirklich hat.
+            # Relativer Pfad bleibt auf dem aktuellen Host; auf die Domain wechselt
+            # die Fortschrittsseite erst, wenn Caddy das Zertifikat hat.
             domain_url = (f"https://{domain}/login"
                           if domain and access in ("domain", "both") else "")
             _setup_update(**{"percent": 100, "step": "Fertig", "done": True,
                                 "running": False, "redirect": "/login",
                                 "domain_url": domain_url})
         except Exception as exc:  # noqa: BLE001 - Fehler dem Nutzer zeigen
-            # esc: der Text landet auf der Fortschrittsseite per innerHTML — Fehler-
-            # meldungen können Nutzereingaben (z. B. die Domain) enthalten.
+            # Landet per innerHTML auf der Fortschrittsseite.
             _setup_update(**{"error": ui.esc(str(exc)), "running": False, "step": "Fehler"})
 
     threading.Thread(target=worker, daemon=True).start()
 
 
-# Software-Update: Version prüfen (GitHub, stündlich gecacht) und per Klick
-# aktualisieren — der eigentliche Lauf passiert über die systemd-Update-Unit,
-# damit der Neustart von weblab das Update nicht selbst abbricht.
+# Update laeuft ueber die systemd-Unit, damit der weblab-Neustart es nicht abbricht.
 VERSION_FILE = os.environ.get("WEBLAB_VERSION_FILE", "/opt/weblab/VERSION")
 UPDATE_SRC = os.environ.get("WEBLAB_SRC_DIR", "/opt/weblab/src")
 _UPDATE_CACHE = {"t": 0.0, "remote": ""}
@@ -223,16 +249,30 @@ def _repo_slug():
     return m.group(1) if m else ""
 
 
-def remote_version():
-    now = time.time()
-    if now - _UPDATE_CACHE["t"] < 3600:
-        return _UPDATE_CACHE["remote"]
-    _UPDATE_CACHE["t"] = now
+def _branch():
+    try:
+        head = open(os.path.join(UPDATE_SRC, ".git", "HEAD"), encoding="utf-8").read().strip()
+    except OSError:
+        return "main"
+    if head.startswith("ref:"):
+        return head.split("refs/heads/", 1)[-1].strip() or "main"
+    return "main"
+
+
+def _refresh_remote_version():
+    """Versionsabgleich mit GitHub — laeuft im Hintergrund, nie auf dem Anzeigeweg."""
     slug = _repo_slug()
-    if slug:
-        resp = integrations.http_json(
-            f"https://api.github.com/repos/{slug}/commits/main", timeout=8)
-        _UPDATE_CACHE["remote"] = (resp.get("sha") or "")[:7]
+    if not slug:
+        return ""
+    resp = integrations.http_json(
+        f"https://api.github.com/repos/{slug}/commits/{_branch()}", timeout=8)
+    sha = (resp.get("sha") or "")[:7]
+    if sha:
+        _UPDATE_CACHE.update({"remote": sha, "t": time.time()})
+    return _UPDATE_CACHE["remote"]
+
+
+def remote_version():
     return _UPDATE_CACHE["remote"]
 
 
@@ -241,9 +281,7 @@ def update_available():
     return bool(cur and rem) and not rem.startswith(cur[:7])
 
 
-# Hintergrund-Jobs mit Fortschritt: lange Aktionen (App installieren, Übernahme,
-# DNS verbinden) blockieren nie den Klick — der Browser landet sofort auf einer
-# Fortschrittsseite, die den Job abfragt und am Ende weiterleitet.
+# Lange Aktionen laufen als Job; die Seite fragt den Fortschritt ab.
 JOBS = {}
 _JOBS_MAX = 40
 
@@ -278,18 +316,18 @@ def start_job(title, worker, fallback="/apps"):
     return job_id
 
 
-# Request-Handler
 class Handler(BaseHTTPRequestHandler):
     server_version = "weblab"
     protocol_version = "HTTP/1.1"
+    timeout = 30                       # untaetige Keep-Alive-Verbindung gibt den Thread frei
+    disable_nagle_algorithm = True
 
     def log_message(self, fmt, *args):
         pass  # Zugriffe protokolliert Caddy
 
     def handle_one_request(self):
-        # Bei Keep-Alive bedient dieselbe Instanz mehrere Anfragen. Die
-        # zwischengespeicherte Sitzung muss pro Anfrage neu gelesen werden,
-        # sonst bleibt ein altes "nicht eingeloggt" haften -> Login-Schleife.
+        # Bei Keep-Alive bedient dieselbe Instanz mehrere Anfragen: Sitzung je
+        # Anfrage neu lesen, sonst haengt ein altes "nicht eingeloggt" fest.
         self.__dict__.pop("_session", None)
         super().handle_one_request()
 
@@ -313,7 +351,7 @@ class Handler(BaseHTTPRequestHandler):
         headers = {"Location": location}
         if flash:
             kind, text = flash
-            if kind == "err":
+            if kind == "err" and self._is_admin():
                 store.set_setting("banner", text)      # bleibt bis zum Schließen
             else:
                 value = urllib.parse.quote(f"{kind}|{text}")
@@ -354,10 +392,10 @@ class Handler(BaseHTTPRequestHandler):
     def _is_admin(self):
         return (self.user or {}).get("role") == "admin"
 
-    # Bereiche, die nur der Administrator sehen darf (Nutzer werden umgeleitet).
-    ADMIN_AREAS = ("/apps/catalog", "/apps/install", "/network", "/storage",
-                   "/users", "/transfer", "/settings", "/api/stats", "/api/setup",
-                   "/banner", "/jobs", "/api/jobs", "/update", "/api/version")
+    ADMIN_AREAS = ("/apps/catalog", "/apps/install", "/domains", "/network", "/server",
+                   "/storage", "/banner",
+                   "/users", "/transfer", "/settings", "/api/setup",
+                   "/jobs", "/api/jobs", "/update", "/api/version")
 
     def _authz(self, path):
         """Zugriffskontrolle fuer eingeschraenkte Nutzer. True = abgewiesen (Antwort schon gesendet).
@@ -390,11 +428,12 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urllib.parse.parse_qs(query, keep_blank_values=True)
         return {k: v[0] for k, v in parsed.items()}
 
-    def _render(self, title, body, active="/", head=""):
+    def _render(self, title, body, active="/", head="", parent=None):
         user = (self.session or {}).get("user")
         page = ui.page(title, body, active=active, user=user, flash=self._take_flash(), head=head,
-                       banner=ui.banner_html(store.get_setting("banner", ""), self.csrf),
-                       is_admin=self._is_admin())
+                       banner=(ui.banner_html(store.get_setting("banner", ""), self.csrf)
+                               if self._is_admin() else ""),
+                       is_admin=self._is_admin(), parent=parent)
         self._send(page, headers={"Set-Cookie": "weblab_flash=; Path=/; Max-Age=0"})
 
     def _require_auth(self):
@@ -427,12 +466,39 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as exc:  # noqa: BLE001
             self._redirect(self.headers.get("Referer", "/"), ("err", str(exc)))
 
+    STATIC_MAX_AGE = "public, max-age=31536000, immutable"
+
+    def _static(self, path):
+        """Design, Symbole und Manifest — mit Inhalts-Hash im Namen, daher dauerhaft cachebar."""
+        if path.endswith(".css"):
+            return self._send(ui.CSS, 200, "text/css; charset=utf-8",
+                              {"Cache-Control": self.STATIC_MAX_AGE})
+        if path.endswith(".js"):
+            return self._send(ui.GLOBAL_JS, 200, "application/javascript; charset=utf-8",
+                              {"Cache-Control": self.STATIC_MAX_AGE})
+        if path.endswith("icon.svg"):
+            return self._send(icon.svg(), 200, "image/svg+xml",
+                              {"Cache-Control": self.STATIC_MAX_AGE})
+        match = re.fullmatch(r"/static/icon-(\d{2,4})\.png", path)
+        if match or path == "/favicon.ico":
+            # Nur feste Groessen: das Bild wird in Python gerechnet, beliebige
+            # Groessen waeren unangemeldet aufrufbare Rechenlast.
+            size = int(match.group(1)) if match else 64
+            if size not in icon.SIZES:
+                return self._send("", 404, "text/plain")
+            return self._send(icon.png_bytes(size), 200, "image/png",
+                              {"Cache-Control": self.STATIC_MAX_AGE})
+        if path.endswith(".webmanifest"):
+            return self._send(ui.MANIFEST, 200, "application/manifest+json",
+                              {"Cache-Control": "public, max-age=86400"})
+        return self._send("", 404, "text/plain")
+
     def route_get(self, path):
+        if path.startswith("/static/") or path == "/favicon.ico":
+            return self._static(path)
         if path == "/api/tls-ask":
-            # Caddy fragt (lokal), ob on_demand ein internes Zertifikat ausstellen darf.
-            # NUR für IP-Adressen erlauben: echte Domains bekommen ausschließlich ihr
-            # Let's-Encrypt-Zertifikat über ihre benannte Site — sonst würde der
-            # Catch-all die Domain mit einem Self-signed-Zertifikat vergiften.
+            # Interne Zertifikate nur fuer IPs: sonst vergiftet der Catch-all die
+            # Domain mit einem selbstsignierten Zertifikat.
             name = self._query().get("domain", "")
             try:
                 import ipaddress
@@ -451,9 +517,8 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/setup/status":
             state = dict(SETUP_STATE)
             if not state.get("running") and not state.get("done") and not state.get("error"):
-                # Kein Setup im Speicher: entweder ist es längst fertig (Prozess wurde
-                # neu gestartet) oder es wurde mittendrin abgebrochen. Beides erkennen,
-                # statt die Fortschrittsseite ewig bei 0 % stehen zu lassen.
+                # Kein Setup im Speicher: fertig oder abgebrochen — beides erkennen,
+                # sonst steht die Fortschrittsseite ewig bei 0 %.
                 if store.is_setup_done():
                     state.update({"done": True, "percent": 100, "step": "Fertig",
                                   "redirect": "/login", "domain_url": ""})
@@ -463,8 +528,6 @@ class Handler(BaseHTTPRequestHandler):
                     except ValueError:
                         saved = {}
                     if saved.get("error"):
-                        # Der Lauf ist VOR dem Neustart gescheitert: den gespeicherten
-                        # Fehler zeigen statt ewig bei 0 % zu warten.
                         state.update({"error": saved["error"],
                                       "percent": saved.get("percent", 0),
                                       "step": saved.get("step", "Fehler")})
@@ -475,17 +538,14 @@ class Handler(BaseHTTPRequestHandler):
                                           'Erledigtes wird übersprungen.')
             return self._json(state)
         if path == "/api/setup/cert":
-            # Live-Check für die Fortschrittsseite: steht das Zertifikat für die
-            # Verwaltungsdomain schon? (nur die konfigurierte Domain — kein Oracle)
+            # Nur die konfigurierte Domain pruefen — kein Oracle fuer Fremde.
             dom = store.get_setting("manage_domain", "")
             return self._json({"ready": bool(dom) and integrations.https_ready(dom),
                                "url": f"https://{dom}/login" if dom else ""})
         if path == "/login":
             return self.page_login()
         if path == "/logout":
-            return self._send("", 303, "text/plain", {
-                "Location": "/login",
-                "Set-Cookie": f"{COOKIE}=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict"})
+            return self._redirect("/konto")
 
         if not self._require_auth():
             return None
@@ -505,7 +565,9 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"version": current_version(), "remote": remote_version(),
                                "update": update_available()})
         if path == "/update":
-            return self.page_update()
+            if self._query().get("laeuft"):
+                return self.page_update()
+            return self.page_version()
         match = re.fullmatch(r"/jobs/([\w-]+)", path)
         if match:
             return self.page_job(match.group(1))
@@ -540,14 +602,20 @@ class Handler(BaseHTTPRequestHandler):
         match = re.fullmatch(r"/apps/(\d+)/share", path)
         if match:
             return self.page_share(int(match.group(1)))
-        if path == "/network":
+        if path in ("/domains", "/network"):      # /network bleibt als Lesezeichen
             return self.page_network()
+        if path == "/mehr":
+            return self.page_more()
+        if path == "/server":
+            return self.page_server()
+        if path == "/konto":
+            return self.page_account()
         if path == "/storage":
             return self.page_storage()
         if path == "/users":
             return self.page_users()
         if path == "/settings":
-            return self._redirect("/network")
+            return self._redirect("/mehr")
         if path == "/network/cloudflare/callback":
             return self.cf_callback()
         return self._send(ui.page("Nicht gefunden", "<h1>404</h1><p class='sub'>Seite gibt es nicht.</p>",
@@ -558,6 +626,9 @@ class Handler(BaseHTTPRequestHandler):
         if content_type.startswith("multipart/form-data"):
             match = re.fullmatch(r"/apps/(\d+)/files", path)
             if not match or not self._require_auth():
+                length = int(self.headers.get("Content-Length") or 0)
+                while length > 0:                 # Koerper verwerfen, sonst desynchronisiert
+                    length -= len(self.rfile.read(min(length, 65536)) or b"")
                 return self._redirect("/apps")
             if self._authz(path):
                 return None
@@ -596,21 +667,25 @@ class Handler(BaseHTTPRequestHandler):
         match = re.fullmatch(r"/apps/(\d+)/files", path)
         if match:
             return self.do_files(int(match.group(1)), form)
-        if path == "/network":
+        if path in ("/domains", "/network", "/server"):
             return self.do_network(form)
         if path == "/users":
             return self.do_users(form)
+        if path == "/konto":
+            return self.do_account(form)
+        if path == "/logout":
+            return self._send("", 303, "text/plain", {
+                "Location": "/login",
+                "Set-Cookie": f"{COOKIE}=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict"})
         if path == "/banner":
             store.set_setting("banner", "")
             return self._redirect(self.headers.get("Referer", "/"))
         if path == "/update":
-            # Update über die systemd-Unit anstoßen (überlebt den weblab-Neustart).
             subprocess.Popen(["systemctl", "start", "--no-block", "weblab-update.service"],
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            return self._redirect("/update")
+            return self._redirect("/update?laeuft=1")
         return self._redirect("/")
 
-    # Setup + Login
     def page_setup(self):
         if store.is_setup_done():
             return self._redirect("/login")
@@ -721,12 +796,15 @@ class Handler(BaseHTTPRequestHandler):
         job = JOBS.get(job_id)
         if not job:
             return self._redirect("/apps", ("err", "Vorgang nicht (mehr) vorhanden."))
+        back = job.get("redirect") or "/apps"
         body = f"""<div class="box"><div class="card">
 <h1>{ui.esc(job['title'])}</h1>
 <p class="sub" id="step">Bitte warten …</p>
 <div class="progress"><i id="bar"></i></div>
 <p class="help" id="pct">0 %</p>
 <div id="err"></div>
+<p class="help" style="margin-top:14px"><a href="{ui.esc(back)}">Im Hintergrund weiterlaufen
+lassen</a></p>
 </div></div>
 <script>
 (function(){{
@@ -753,7 +831,29 @@ class Handler(BaseHTTPRequestHandler):
    setTimeout(tick,1500)}});
  }} tick();}})();
 </script>"""
-        self._send(ui.bare(job["title"], body))
+        self._send(ui.bare(job["title"], body, parent=("Apps", "/apps")))
+
+    def page_version(self):
+        cur, rem = current_version(), remote_version()
+        available = False
+        try:
+            available = update_available()
+        except Exception:  # noqa: BLE001
+            pass
+        if available:
+            action = (f'<form method="post" action="/update">{ui.csrf_input(self.csrf)}'
+                      f'<button class="btn primary wide" type="submit">Jetzt aktualisieren'
+                      f'</button></form>')
+        elif rem:
+            action = '<p class="help">Diese Version ist aktuell. Prüfung läuft stündlich.</p>'
+        else:
+            action = ('<p class="help">Der Abgleich mit GitHub steht noch aus — '
+                      'die Prüfung läuft im Hintergrund.</p>')
+        body = f"""<h1>Version</h1>
+{ui.group([ui.li("Installiert", side=ui.esc(cur or "unbekannt"), chevron=False),
+           ui.li("Im Repository", side=ui.esc(rem or "unbekannt"), chevron=False)])}
+<div class="card">{action}</div>"""
+        self._render("Version", body, "/mehr", parent=("Mehr", "/mehr"))
 
     def page_update(self):
         cur = current_version()
@@ -816,9 +916,7 @@ class Handler(BaseHTTPRequestHandler):
         payload = {"user": user["username"], "uid": user["id"],
                    "role": user.get("role", "admin"),
                    "sid": secrets.token_hex(8), "exp": time.time() + SESSION_MAX_AGE}
-        # SameSite=Lax (nicht Strict): das Sitzungs-Cookie wird auch bei der
-        # HTTP->HTTPS-Umschaltung mitgeschickt (kein erneuter Login noetig). CSRF ist
-        # ueber eigene Tokens abgesichert.
+        # Lax statt Strict: das Cookie ueberlebt die HTTP->HTTPS-Umschaltung.
         cookie = (f"{COOKIE}={sign_session(payload)}; Path=/; Max-Age={SESSION_MAX_AGE}; "
                   f"HttpOnly; SameSite=Lax")
         if self.headers.get("X-Forwarded-Proto") == "https":
@@ -828,100 +926,98 @@ class Handler(BaseHTTPRequestHandler):
     # Dashboard
     def collect_stats(self):
         overview = sysinfo.overview()
-        container_stats = dockerctl.stats() if dockerctl.available() else {}
+        have_docker = dockerctl.available()
+        container_stats = dockerctl.stats() if have_docker else {}
+        snap = dockerctl.states() if have_docker else {}
+        apps_list = (store.list_apps() if self._is_admin()
+                     else store.apps_for_owner(self.user["id"]))
         rows = []
-        for app in store.list_apps():
-            usage = container_stats.get(app["slug"], {})
+        for app in apps_list:
             rows.append({"slug": app["slug"], "name": app["name"],
-                         "state": dockerctl.status(app["slug"]),
-                         "cpu": usage.get("cpu", "—"), "mem": usage.get("mem", "—"),
-                         "net": usage.get("net", "—")})
-        return {"system": overview, "apps": rows}
+                         "state": appsvc.app_state(app, snap),
+                         "cpu": appsvc.app_cpu(app, container_stats, overview["cpu_count"]),
+                         "mem": appsvc.app_mem(app, container_stats),
+                         "net": (container_stats.get(app["slug"], {}) or {}).get("net", "—")})
+        system = {"cpu": f"{ui.num(overview['cpu_percent'])} %",
+                  "mem": f"{ui.num(overview['mem']['percent'])} %"} if self._is_admin() else {}
+        return {"system": system, "apps": rows}
 
-    def page_dashboard(self):
+    def _todo_rows(self, apps_list, snap):
+        """Was gerade Aufmerksamkeit braucht — jede Zeile führt direkt zur Lösung."""
+        rows = []
+        if update_available():
+            rows.append(ui.li("Update verfügbar", "/update",
+                              sub=f"{ui.esc(current_version())} auf {ui.esc(remote_version())}",
+                              ic="&#8593;"))
+        for app in apps_list:
+            state = appsvc.app_state(app, snap)
+            if state not in ("running", ""):
+                rows.append(ui.li(app["name"], f"/apps/{app['id']}",
+                                  sub=ui.STATE_HINTS.get(state, "braucht Aufmerksamkeit"),
+                                  side=ui.status_pill(state), ic="&#9888;"))
+        if self._is_admin() and self._transfer_found():
+            rows.append(ui.li("Alte Installation gefunden", "/transfer",
+                              sub="Daten können übernommen werden", ic="&#8623;"))
+        return rows
+
+    def page_dashboard(self, apps_list=None):
         info = sysinfo.overview()
-        app_list = store.list_apps()
-        stats = dockerctl.stats() if dockerctl.available() else {}
-        domain = store.get_setting("manage_domain", "")
-        running = sum(1 for a in app_list if dockerctl.status(a["slug"]) == "running")
+        apps_list = store.list_apps() if apps_list is None else apps_list
+        snap = dockerctl.states()
+        running = sum(1 for a in apps_list if appsvc.app_state(a, snap) == "running")
+        disk = info["disk"]
 
         cards = "".join([
-            ui.stat("CPU", f"{info['cpu_percent']} %", info["cpu_percent"],
-                    f"{info['cpu_count']} Kerne · Last {info['load'][0]:.2f}"),
-            ui.stat("Arbeitsspeicher", f"{info['mem']['percent']} %", info["mem"]["percent"],
-                    f"{sysinfo.human_bytes(info['mem']['used'])} von {sysinfo.human_bytes(info['mem']['total'])}"),
-            ui.stat("Speicherplatz", f"{info['disk']['percent']} %", info["disk"]["percent"],
-                    f"{sysinfo.human_bytes(info['disk']['free'])} frei"),
-            ui.stat("Apps", f"{running}/{len(app_list)}", None, "laufend / installiert"),
+            ui.stat("CPU", f'<span data-sys="cpu">{ui.num(info["cpu_percent"])} %</span>',
+                    info["cpu_percent"], f"{info['cpu_count']} Kerne", raw=True),
+            ui.stat("Arbeitsspeicher",
+                    f'<span data-sys="mem">{ui.num(info["mem"]["percent"])} %</span>',
+                    info["mem"]["percent"],
+                    f"{sysinfo.human_bytes(info['mem']['used'])} von "
+                    f"{sysinfo.human_bytes(info['mem']['total'])}", raw=True),
+            ui.stat("Systemlaufwerk", f"{ui.num(disk['percent'])} %", disk["percent"],
+                    f"{sysinfo.human_bytes(disk['free'])} frei", href="/storage"),
+            ui.stat("Apps", f"{running}/{len(apps_list)}", None, "laufen", href="/apps"),
         ])
 
-        rows = ""
-        for app in app_list:
-            usage = stats.get(app["slug"], {})
-            state = dockerctl.status(app["slug"])
-            if app["domain"]:
-                target = f"<a href='https://{ui.esc(app['domain'])}' target='_blank' rel='noopener'>{ui.esc(app['domain'])} ↗</a>"
-            else:
-                target = f"<span class='mono'>Port {ui.esc(app['host_port'])}</span>"
-            rows += (f"<tr><td><a href='/apps/{app['id']}'><b>{ui.esc(app['name'])}</b></a></td>"
-                     f"<td>{ui.status_pill(state)}</td>"
-                     f"<td class='mono'>{ui.esc(usage.get('cpu', '—'))}</td>"
-                     f"<td class='mono'>{ui.esc(usage.get('mem', '—'))}</td>"
-                     f"<td>{target}</td></tr>")
-        if not rows:
-            rows = ("<tr><td colspan='5' class='muted'>Noch keine App installiert — "
-                    "<a href='/apps'>zum Katalog</a>.</td></tr>")
+        todo = self._todo_rows(apps_list, snap)
+        todo_html = ui.group(todo, "Zu erledigen") if todo else ""
 
-        # Update-Hinweis (Prüfung stündlich gecacht, best-effort).
-        update_html = ""
-        try:
-            if update_available():
-                update_html = (f'<div class="card" style="margin-bottom:14px">'
-                               f'<div class="between"><div><b>Update verfügbar</b>'
-                               f'<p class="help" style="margin:2px 0 0">'
-                               f'{ui.esc(current_version())} → {ui.esc(remote_version())}</p></div>'
-                               f'<form method="post" action="/update">{ui.csrf_input(self.csrf)}'
-                               f'<button class="btn primary" type="submit">Jetzt aktualisieren'
-                               f'</button></form></div></div>')
-        except Exception:  # noqa: BLE001 - Anzeige darf das Dashboard nie stören
-            pass
-        version_note = f" · Version {ui.esc(current_version())}" if current_version() else ""
+        rows = []
+        for app in apps_list:
+            url = appsvc.public_url(app)
+            rows.append(ui.li(app["name"], f"/apps/{app['id']}",
+                              sub=ui.esc(url.split("://")[-1] if url
+                                         else appsvc.local_hint(app)),
+                              side=ui.status_pill(appsvc.app_state(app, snap))))
+        apps_html = (ui.group(rows, "Apps") if rows else
+                     ui.group([ui.li("App installieren", "/apps",
+                                     sub="Noch nichts installiert", ic="&#43;")], "Apps"))
 
-        body = f"""<h1>Dashboard</h1>
-<p class="sub">Läuft seit {ui.esc(sysinfo.human_uptime(info['uptime']))}{version_note}</p>
-{update_html}
-<div class="grid g4">{cards}</div>
-<h2>Apps</h2>
-<div class="card"><div class="tbl-wrap"><table>
-<tr><th>App</th><th>Status</th><th>CPU</th><th>Speicher</th><th>Erreichbar über</th></tr>
-{rows}</table></div></div>"""
-        self._render("Dashboard", body, "/")
+        body = f"""<h1>Start</h1>
+<p class="sub">{ui.esc(sysinfo.hostname())} · läuft seit
+{ui.esc(sysinfo.human_uptime(info['uptime']))}</p>
+{todo_html}
+<div class="grid g4" data-live>{cards}</div>
+{apps_html}"""
+        self._render("Start", body, "/")
 
     # Apps: Katalog + Liste
-    @staticmethod
-    def _human_size(num):
-        num = float(num or 0)
-        for unit in ("B", "KB", "MB", "GB"):
-            if num < 1024:
-                return f"{num:.0f} {unit}" if unit == "B" else f"{num:.1f} {unit}"
-            num /= 1024
-        return f"{num:.1f} TB"
-
     def page_transfer(self):
         try:
             detections = transfer.scan()
         except Exception:  # noqa: BLE001
             detections = []
         if not detections:
-            body = ("<a href='/apps' class='muted'>← Apps</a><h1>Übernehmen</h1>"
+            body = ("<h1>Alte Installation einlesen</h1>"
                     "<div class='card muted'>Keine übernehmbare Alt-Installation gefunden.</div>")
-            return self._render("Übernehmen", body, "/apps")
+            return self._render("Alte Installation einlesen", body, "/mehr", parent=("Mehr", "/mehr"))
         cards = ""
         for det in detections:
             opts = "".join(f"<option value='{ui.esc(o['connector_id'])}'>{ui.esc(o['name'])}</option>"
                            for o in det["options"])
             try:
-                size = self._human_size(transfer.dir_size(det["path"]))
+                size = sysinfo.human_bytes(transfer.dir_size(det["path"]))
             except Exception:  # noqa: BLE001
                 size = "?"
             cards += f"""<div class="card"><form method="post" action="/transfer" class="row" style="justify-content:space-between;align-items:center;gap:12px">{ui.csrf_input(self.csrf)}
@@ -931,10 +1027,10 @@ class Handler(BaseHTTPRequestHandler):
 <div class="row" style="flex-wrap:nowrap">
 <select name="connector_id">{opts}</select>
 <button class="btn primary" type="submit">Übernehmen</button></div></form></div>"""
-        body = (f"<a href='/apps' class='muted'>← Apps</a><h1>Alte Software übernehmen</h1>"
+        body = (f"<h1>Alte Installation einlesen</h1>"
                 f"<p class='sub'>Gefundene Installationen werden gesichert (tmp-Backup), sauber neu "
                 f"installiert und die Daten wieder eingespielt.</p>{cards}")
-        self._render("Übernehmen", body, "/apps")
+        self._render("Alte Installation einlesen", body, "/mehr", parent=("Mehr", "/mehr"))
 
     def do_transfer(self, form):
         def worker(progress, job):
@@ -951,10 +1047,8 @@ class Handler(BaseHTTPRequestHandler):
 
     _TRANSFER_SCAN = {"t": 0.0, "found": []}
 
-    def _transfer_hint(self):
-        """Karte 'Alte Software gefunden' — nur für Admins, Scan 10 min gecacht."""
-        if not self._is_admin():
-            return ""
+    def _transfer_found(self):
+        """Alte Installationen — Scan 10 min gecacht (Dateisystem-Suche ist teuer)."""
         cache = Handler._TRANSFER_SCAN
         if time.time() - cache["t"] > 600:
             try:
@@ -962,8 +1056,12 @@ class Handler(BaseHTTPRequestHandler):
             except Exception:  # noqa: BLE001
                 cache["found"] = []
             cache["t"] = time.time()
-        if not cache["found"]:
+        return cache["found"]
+
+    def _transfer_hint(self):
+        if not self._is_admin() or not self._transfer_found():
             return ""
+        cache = Handler._TRANSFER_SCAN
         paths = ", ".join(d["path"] for d in cache["found"][:3])
         return (f'<div class="card" style="margin-bottom:14px"><div class="between">'
                 f'<div><b>Alte Software gefunden</b>'
@@ -974,32 +1072,27 @@ class Handler(BaseHTTPRequestHandler):
     def page_apps(self):
         installed = (store.list_apps() if self._is_admin()
                      else store.apps_for_owner(self.user["id"]))
-        news = connector_news()
-        latest = {g["group"]: g["latest"] for g in catalog.groups()}
-        rows = ""
+        news = connector_news(write=False)
+        groups = catalog.groups()
+        latest = {g["group"]: g["latest"] for g in groups}
+        snap = dockerctl.states()
+        rows = []
         for app in installed:
-            state = dockerctl.status(app["slug"])
-            link = (f"<a href='https://{ui.esc(app['domain'])}' target='_blank' rel='noopener'>{ui.esc(app['domain'])} ↗</a>"
-                    if app["domain"] else f"<span class='mono'>Port {ui.esc(app['host_port'])}</span>")
             top = latest.get(app["group_id"]) or {}
             upd = (' <span class="badge">Update</span>'
                    if top.get("version") and top["version"] != app["version"] else "")
-            rows += (f"<tr><td><a href='/apps/{app['id']}'><b>{ui.esc(app['name'])}</b></a></td>"
-                     f"<td>{ui.status_pill(state)}</td>"
-                     f"<td class='mono'>{ui.esc(app['version'])}{upd}</td>"
-                     f"<td>{link}</td>"
-                     f"<td><a class='btn sm' href='/apps/{app['id']}/edit'>Einstellungen</a></td></tr>")
-        installed_html = (f"<div class='card'><div class='tbl-wrap'><table>"
-                          f"<tr><th>Name</th><th>Status</th><th>Version</th><th>Erreichbar</th>"
-                          f"<th></th></tr>{rows}</table></div></div>"
-                          if rows else
-                          "<div class='card muted'>Noch nichts installiert.</div>")
+            url = appsvc.public_url(app)
+            rows.append(ui.li(app["name"], f"/apps/{app['id']}",
+                              sub=ui.esc(url.split("://")[-1] if url else appsvc.local_hint(app))
+                              + f" · Version {ui.esc(app['version'])}{upd}",
+                              side=ui.status_pill(appsvc.app_state(app, snap))))
+        installed_html = (ui.group(rows, "Installiert") if rows else
+                          '<h2>Installiert</h2><div class="card muted">Noch nichts installiert.</div>')
 
         # Katalog wie ein App-Store: standardmäßig NUR die kuratierten Empfehlungen
         # (ein sauberes Produkt pro Bedarf). Der volle Katalog erscheint erst, wenn
         # man sucht oder nach Zielgruppe/Kategorie filtert — suchen und finden statt
         # scrollen.
-        groups = catalog.groups()
         aud_label = {"homelab": "Homelab", "server": "Server", "beide": "Homelab · Server"}
 
         def card(group, big=False):
@@ -1032,7 +1125,7 @@ class Handler(BaseHTTPRequestHandler):
 
         body = f"""<h1>Apps</h1>
 {self._transfer_hint()}
-<h2>Installiert</h2>{installed_html}
+{installed_html}
 <h2>Katalog</h2>
 <div class="cat-tools" id="catTools">
  <div class="row1">
@@ -1163,7 +1256,7 @@ class Handler(BaseHTTPRequestHandler):
                 f'{ui._info_attr("Eigenes Dashboard + Dateimanager dieser App unter dieser Adresse. Die Seite selbst läuft unter der Domain darüber.")}>'
                 f'</div>')
 
-        body = f"""<a href="/apps" class="muted">← Katalog</a>
+        body = f"""
 <h1>{ui.esc(group['icon'])} {ui.esc(group['name'])}</h1>
 <p class="sub">{ui.esc(group['summary'])}</p>
 <form method="post" action="/apps/install">
@@ -1201,8 +1294,8 @@ class Handler(BaseHTTPRequestHandler):
  <select id="network" name="network">{net_options}</select></div>''')}
 <div class="row" style="margin-top:16px"><button class="btn primary" type="submit">App installieren</button>
 <a class="btn" href="/apps">Abbrechen</a></div>
-</form>{ui.DEPENDS_JS}"""
-        self._render(group["name"], body, "/apps")
+</form>"""
+        self._render(group["name"], body, "/apps", parent=("Apps", "/apps"))
 
     def do_install(self, form):
         connector = catalog.get(form.get("connector_id", "")) or {}
@@ -1228,14 +1321,10 @@ class Handler(BaseHTTPRequestHandler):
     def _app_tabs(self, app, active):
         connector = catalog.get(app["connector_id"]) or {}
         items = [("Übersicht", f"/apps/{app['id']}")]
-        if connector.get("manage_subdomain") \
-                and not appsvc.manager_active(connector, app.get("values")):
-            # Eingebauter Datei-Tab nur noch für Alt-Apps ohne dediziertes
-            # Dashboard — neue Website-Apps verwalten Dateien über ihr eigenes
-            # Verwaltungsprodukt auf der Verwaltungs-Domain.
+        if connector.get("manage_subdomain"):
             items.append(("Dateien", f"/apps/{app['id']}/files"))
         items += [("Einstellungen", f"/apps/{app['id']}/edit"),
-                  ("Protokoll", f"/apps/{app['id']}/logs")]
+                  ("Log", f"/apps/{app['id']}/logs")]
         return '<div class="tabs">' + "".join(
             f'<a class="{"on" if label == active else ""}" href="{href}">{label}</a>'
             for label, href in items) + "</div>"
@@ -1244,109 +1333,114 @@ class Handler(BaseHTTPRequestHandler):
         app, connector = self._app_and_connector(app_id)
         if not app:
             return self._redirect("/apps", ("err", "App nicht gefunden."))
-        state = dockerctl.status(app["slug"])
-        usage = dockerctl.stats().get(app["slug"], {}) if dockerctl.available() else {}
-        url = f"https://{app['domain']}" if app["domain"] and connector and connector.get("http") \
-            else f"{store.get_setting('server_ip', '')}:{app['host_port']}"
-        _href = url if url.startswith("http") else f"http://{url}"
-        app_link = f'<a href="{ui.esc(_href)}" target="_blank" rel="noopener">{ui.esc(url)} ↗</a>'
+        snap = dockerctl.states()
+        state = appsvc.app_state(app, snap)
+        url = appsvc.public_url(app, connector)
+        reach = (f'<a href="{ui.esc(url)}" target="_blank" rel="noopener">'
+                 f'{ui.esc(url.split("://")[-1])} &#8599;</a>' if url
+                 else f'<span class="mono">{ui.esc(appsvc.local_hint(app))}</span>')
 
-        del_modal = ""
-        del_open = ""
-        if self._is_admin():
-            del_open = ('<button type="button" class="btn danger" '
-                        f"onclick=\"document.getElementById('delDlg').showModal()\">Entfernen …</button>")
-            del_modal = ui.modal("delDlg", f'„{ui.esc(app["name"])}" entfernen', f"""
-<form method="post" action="/apps/{app['id']}/action">{ui.csrf_input(self.csrf)}
-<div class="field"><label>Daten dieser App</label>
- <label class="check"><input type="radio" name="delete_data" value="0" checked>
-  <span>Behalten (Backup / da lassen)</span></label>
- <label class="check"><input type="radio" name="delete_data" value="1">
-  <span>Endgültig löschen</span></label></div>
-<label class="check"><input type="checkbox" name="delete_dns" value="1">
- <span>DNS-Einträge dieser App löschen</span></label>
-<div style="margin-top:12px"><button class="btn danger" name="action" value="delete">Entfernen</button></div>
-</form>""")
-        actions = f"""<form method="post" action="/apps/{app['id']}/action" class="row">
+        manage_row = ""
+        mspec = appsvc.manager_spec(connector or {})
+        if app.get("manage_host"):
+            label = ((mspec or {}).get("label") or "Verwaltung") if \
+                appsvc.manager_active(connector, app["values"]) else "Verwaltung"
+            manage_row = (f'<dt>{ui.esc(label)}</dt><dd><a href="https://{ui.esc(app["manage_host"])}"'
+                          f' target="_blank" rel="noopener">{ui.esc(app["manage_host"])} &#8599;</a></dd>')
+
+        actions = f"""<form method="post" action="/apps/{app['id']}/action" class="row equal">
 {ui.csrf_input(self.csrf)}
 <button class="btn" name="action" value="start">Starten</button>
 <button class="btn" name="action" value="restart">Neu starten</button>
 <button class="btn" name="action" value="stop">Stoppen</button>
-</form>{del_open}"""
+</form>"""
+
         transfer_html = ""
         if self._is_admin():
             owner = store.get_user(app.get("owner_id")) if app.get("owner_id") else None
-            owner_txt = (f"Übertragen an <b>{ui.esc(owner['username'])}</b>" if owner
-                         else "Noch nicht übertragen")
-            transfer_html = (f"<div class='card' style='margin-top:13px'><div class='between'>"
-                             f"<div><b>Nutzer-Zugang</b><p class='help' style='margin:0'>{owner_txt}</p></div>"
-                             f"<a class='btn' href='/apps/{app['id']}/share'>Übertragen …</a></div></div>")
-        secrets_html = ""
+            owner_txt = (f"Freigegeben an {ui.esc(owner['username'])}" if owner
+                         else "Nur für dich sichtbar")
+            transfer_html = ui.group([ui.li("Für einen Nutzer freigeben",
+                                            f"/apps/{app['id']}/share", sub=owner_txt)])
+
+        secret_rows = []
         if connector:
-            rows = ""
             for field in catalog.all_fields(connector):
                 if field.get("type") != "password" and not field.get("auto"):
                     continue
                 value = app["values"].get(field["key"], "")
-                if not value:
-                    continue
-                rows += (f"<tr><td>{ui.esc(field.get('label', field['key']))}</td>"
-                         f"<td><code class='mono'>{ui.esc(value)}</code></td></tr>")
-            mspec = appsvc.manager_spec(connector)
+                if value:
+                    secret_rows.append(ui.secret_row(field.get("label", field["key"]), value))
             if mspec and appsvc.manager_active(connector, app["values"]):
-                mlabel = mspec.get("label") or "Verwaltung"
-                mhost = app.get("manage_host") or ""
-                mlink = (f'<a href="https://{ui.esc(mhost)}" target="_blank" '
-                         f'rel="noopener">https://{ui.esc(mhost)} ↗</a>') if mhost \
-                    else "<span class='muted'>Verwaltungs-Domain fehlt</span>"
-                rows += (f"<tr><td>Dateiverwaltung ({ui.esc(mlabel)})</td><td>{mlink}</td></tr>"
-                         f"<tr><td>{ui.esc(mlabel)} — Benutzer</td><td><code class='mono'>"
-                         f"{ui.esc(app['values'].get('manager_user', ''))}</code></td></tr>"
-                         f"<tr><td>{ui.esc(mlabel)} — Passwort</td><td><code class='mono'>"
-                         f"{ui.esc(app['values'].get('manager_password', ''))}</code></td></tr>")
-            for note in connector.get("notes") or []:
-                rows += f"<tr><td colspan='2' class='help'>ℹ {ui.esc(note)}</td></tr>"
-            if rows:
-                secrets_html = (f"<h2>Zugangsdaten &amp; Hinweise</h2>"
-                                f"<div class='card'><div class='tbl-wrap'><table>{rows}</table></div>"
-                                f"<p class='help'>Nur hier sichtbar — bitte notieren.</p></div>")
+                label = mspec.get("label") or "Verwaltung"
+                secret_rows.append(ui.secret_row(f"{label} — Benutzer",
+                                                 app["values"].get("manager_user", "")))
+                secret_rows.append(ui.secret_row(f"{label} — Passwort",
+                                                 app["values"].get("manager_password", "")))
+        notes = "".join(f'<p class="help">{ui.esc(note)}</p>'
+                        for note in (connector or {}).get("notes") or [])
+        secrets_html = ""
+        if secret_rows:
+            secrets_html = ui.group(secret_rows, "Zugangsdaten",
+                                    "Nur hier sichtbar — am besten in den Passwort-Manager.")
+        if notes:
+            secrets_html += f'<div class="card">{notes}</div>'
 
-        body = f"""<a href="/apps" class="muted">← Apps</a>
-<div class="between"><div><h1>{ui.esc(app['name'])}</h1>
-<p class="sub">{ui.esc(connector['name'] if connector else app['connector_id'])} · Version {ui.esc(app['version'])}</p></div>
-<div>{ui.status_pill(state)}</div></div>
+        danger = ""
+        if self._is_admin():
+            danger = (f'<div class="danger-zone"><h2>Gefahrenzone</h2>'
+                      f'{ui.open_button("delDlg", "App entfernen …", "btn danger wide")}'
+                      + ui.modal("delDlg", f'{ui.esc(app["name"])} entfernen', f"""
+<form method="post" action="/apps/{app['id']}/action">{ui.csrf_input(self.csrf)}
+{ui.segmented("delete_data", "Daten dieser App", ["0", "1"], "0",
+              {"0": "Behalten", "1": "Löschen"})}
+{ui.switch_row("delete_dns", "DNS-Einträge mit löschen", False)}
+<button class="btn danger wide" name="action" value="delete" style="margin-top:14px"
+ data-confirm="{ui.esc(app['name'])} wirklich entfernen?">Entfernen</button>
+</form>""") + "</div>")
+
+        limits = (f"CPU-Limit {ui.num(app['cpu'])} Kerne · "
+                  f"RAM-Limit {sysinfo.human_bytes(app['ram_mb'] * 1024 * 1024)}")
+        body = f"""<div class="between"><div><h1>{ui.esc(app['name'])}</h1>
+<p class="sub">{ui.esc(connector['name'] if connector else app['connector_id'])} ·
+Version {ui.esc(app['version'])}</p></div><div>{ui.status_pill(state)}</div></div>
 {self._app_tabs(app, 'Übersicht')}
-<div class="grid g3">
-{ui.stat('CPU', usage.get('cpu', '—'), None, 'Limit: ' + str(app['cpu']) + ' Kerne')}
-{ui.stat('Speicher', usage.get('mem', '—') or '—', None, 'Limit: ' + str(app['ram_mb']) + ' MB')}
-{ui.stat('Netzwerk', usage.get('net', '—') or '—', None, ui.esc(app['network']))}
+<div class="grid g3" data-live>
+{ui.stat('CPU', f'<span data-slug="{ui.esc(app["slug"])}" data-metric="cpu">…</span>', raw=True)}
+{ui.stat('Arbeitsspeicher',
+         f'<span data-slug="{ui.esc(app["slug"])}" data-metric="mem">…</span>', raw=True)}
+{ui.stat('Datenverkehr',
+         f'<span data-slug="{ui.esc(app["slug"])}" data-metric="net">…</span>', raw=True)}
 </div>
 <div class="card"><dl class="kv">
-<dt>Erreichbar über</dt><dd class="mono">{app_link}</dd>
-{f'<dt>Verwaltung</dt><dd class="mono"><a href="https://{ui.esc(app["manage_host"])}" target="_blank" rel="noopener">{ui.esc(app["manage_host"])} ↗</a></dd>' if app.get('manage_host') else ''}
-<dt>Sichtbarkeit</dt><dd>{ui.esc(EXPOSURE_LABELS.get(app['exposure'], app['exposure']))}</dd>
+<dt>Erreichbar über</dt><dd>{reach}</dd>
+{manage_row}
+<dt>Erreichbarkeit</dt><dd>{ui.esc(EXPOSURE_LABELS.get(app['exposure'], app['exposure']))}</dd>
+<dt>Grenzen</dt><dd>{ui.esc(limits)}</dd>
 </dl></div>
+<div class="card">{actions}</div>
 {secrets_html}
-<div class="card" style="margin-top:13px">{actions}</div>
-{transfer_html}{del_modal}
-{ui.section("Details", f'''<dl class="kv">
-<dt>Port</dt><dd class="mono">{ui.esc(app['host_port'])} → {ui.esc(app['container_port'])}</dd>
-<dt>Ablageort</dt><dd>{ui.esc(LOCATION_LABELS.get(app['location'], app['location']))}</dd>
-<dt>Datenpfad</dt><dd class="mono">{ui.esc(appsvc.host_data_path(app, app['data_path']))}</dd>
+{transfer_html}
+{ui.section("Technische Details", f'''<dl class="kv">
+<dt>Port</dt><dd class="mono">{ui.esc(app['host_port'])} &#8594; {ui.esc(app['container_port'])}</dd>
+<dt>Wo die Daten liegen</dt><dd class="mono">{ui.esc(appsvc.host_data_path(app, app['data_path']))}</dd>
+<dt>Netz</dt><dd class="mono">{ui.esc(app['network'])}</dd>
 <dt>Container</dt><dd class="mono">{ui.esc(dockerctl.container_name(app['slug']))}</dd>
-</dl>''')}"""
-        self._render(app["name"], body, "/apps")
+</dl>''')}
+{danger}"""
+        self._render(app["name"], body, "/apps", parent=("Apps", "/apps"))
 
     def page_app_logs(self, app_id):
         app, _ = self._app_and_connector(app_id)
         if not app:
             return self._redirect("/apps", ("err", "App nicht gefunden."))
         log_text = dockerctl.logs(app["slug"], 300) if dockerctl.available() else "Docker nicht verfügbar."
-        body = (f'<a href="/apps" class="muted">← Apps</a><h1>{ui.esc(app["name"])}</h1>'
+        body = (f'<h1>{ui.esc(app["name"])}</h1>'
                 f'<p class="sub">Protokoll (letzte 300 Zeilen)</p>'
-                f'{self._app_tabs(app, "Protokoll")}'
+                f'{self._app_tabs(app, "Log")}'
                 f'<div class="card"><pre>{ui.esc(log_text) or "— leer —"}</pre></div>')
-        self._render(app["name"], body, "/apps")
+        self._render(app["name"], body, "/apps",
+                     parent=(app["name"], f"/apps/{app['id']}"))
 
     def page_app_edit(self, app_id):
         app, connector = self._app_and_connector(app_id)
@@ -1421,11 +1515,11 @@ class Handler(BaseHTTPRequestHandler):
  <input id="ram_mb" name="ram_mb" type="number" min="128" value="{ui.esc(app['ram_mb'])}"></div></div>''')}
 </form>"""
 
-        body = (f'<a href="/apps/{app["id"]}" class="muted">← {ui.esc(app["name"])}</a>'
-                f'<h1>Einstellungen</h1><p class="sub">{ui.esc(app["name"])} · '
+        body = (f'<h1>Einstellungen</h1><p class="sub">{ui.esc(app["name"])} · '
                 f'{ui.esc(connector["name"])} {ui.esc(app["version"])}</p>'
-                f'{self._app_tabs(app, "Einstellungen")}{sub_tabs}{content}{ui.DEPENDS_JS}')
-        self._render(f"{app['name']} — Einstellungen", body, "/apps")
+                f'{self._app_tabs(app, "Einstellungen")}{sub_tabs}{content}')
+        self._render(f"{app['name']} — Einstellungen", body, "/apps",
+                     parent=(app["name"], f"/apps/{app['id']}"))
 
     def _plugins_section(self, app, connector):
         config = appsvc.plugin_config(connector)
@@ -1503,9 +1597,10 @@ class Handler(BaseHTTPRequestHandler):
             base = a in dactions or a in perms.BASELINE_ACTIONS
             return (base or f"action:{a}" in grant) and f"action:{a}" not in revoke
         if not users:
-            body = ("<h1>Übertragen</h1><div class='card'><p class='sub'>Noch kein Nutzer "
+            body = ("<h1>Freigeben</h1><div class='card'><p class='sub'>Noch kein Nutzer "
                     "vorhanden. Lege zuerst unter <a href='/users'>Nutzer</a> einen an.</p></div>")
-            return self._render("Übertragen", body, "/apps")
+            return self._render("Freigeben", body, "/apps",
+                                parent=(app["name"], f"/apps/{app['id']}"))
         opts = "<option value=''>— Administrator (nicht übertragen) —</option>" + "".join(
             f"<option value='{u['id']}'{' selected' if u['id']==cur_owner else ''}>{ui.esc(u['username'])}</option>"
             for u in users)
@@ -1519,7 +1614,7 @@ class Handler(BaseHTTPRequestHandler):
             f"{' checked' if act_checked(a) else ''}> <span>{lbl}</span></label>"
             for a, lbl in (("plugins", "Mods/Plugins verwalten"), ("files", "Dateien der App"),
                            ("resources", "RAM/CPU anpassen (bis Limit)")))
-        body = f"""<a href="/apps/{app_id}" class="muted">← Zurück</a>
+        body = f"""
 <h1>„{ui.esc(app['name'])}" übertragen</h1>
 <form method="post" action="/apps/{app_id}/share"><div class="card">{ui.csrf_input(self.csrf)}
 <div class="field"><label>An Nutzer</label><select name="owner_id">{opts}</select></div>
@@ -1533,7 +1628,8 @@ class Handler(BaseHTTPRequestHandler):
 <h3>Der Nutzer darf</h3><div class="checks">{act_rows}</div>
 <h3>Einstellungen, die der Nutzer ändern darf</h3><div class="checks">{field_rows or "<p class='help'>Keine.</p>"}</div>
 <button class="btn primary" type="submit">Übertragen</button></div></form>"""
-        return self._render("Übertragen", body, "/apps")
+        return self._render("Freigeben", body, "/apps",
+                            parent=(app["name"], f"/apps/{app['id']}"))
 
     def do_share(self, app_id, form):
         app, connector = self._app_and_connector(app_id)
@@ -1656,18 +1752,15 @@ class Handler(BaseHTTPRequestHandler):
         if accounts:
             rows = ""
             for acc in accounts:
-                cloudflare = integrations.Cloudflare(acc["token"])
-                valid, info = cloudflare.verify()
-                # Nur die Anzahl zeigen — die Domain-Auswahl passiert bei der App;
-                # die vollständige Liste gehört zu Cloudflare, nicht hierher.
-                count = len(cloudflare.zones()) if valid else 0
+                valid, info = integrations.verify_cached(acc["token"])
+                count = integrations.zone_count(acc["token"]) if valid else 0
                 state = ('<span class="pill run"><span class="dot"></span>verknüpft</span>' if valid
                          else f'<span class="pill err"><span class="dot"></span>{ui.esc(info)}</span>')
                 zones_html = (f' <span class="pill">{count} Domain{"s" if count != 1 else ""}</span>'
                               if valid else "")
                 rows += f"""<div class="between acctrow">
 <div>{state} &nbsp;<span class="mono">{ui.esc(acc['label'])}</span>{zones_html}</div>
-<form method="post" action="/network">{ui.csrf_input(self.csrf)}
+<form method="post" action="/domains">{ui.csrf_input(self.csrf)}
 <input type="hidden" name="action" value="cf_unlink">
 <input type="hidden" name="account_id" value="{ui.esc(acc['id'])}">
 <button class="btn sm danger" type="submit"
@@ -1684,7 +1777,7 @@ class Handler(BaseHTTPRequestHandler):
         client_id = store.get_setting("cf_client_id", "")
         redirect_uri = (f"https://{domain}/network/cloudflare/callback" if domain
                         else "https://<deine-domain>/network/cloudflare/callback")
-        other = f"""<form method="post" action="/network">{ui.csrf_input(self.csrf)}
+        other = f"""<form method="post" action="/domains">{ui.csrf_input(self.csrf)}
 <input type="hidden" name="action" value="cf_link">
 <div class="field"><label for="cf_email">Konto-E-Mail</label>
  <input id="cf_email" name="cf_email" type="email" required autocomplete="off"></div>
@@ -1693,7 +1786,7 @@ class Handler(BaseHTTPRequestHandler):
  <input id="cf_key" name="cf_key" type="password" required autocomplete="off"></div>
 <button class="btn" type="submit">Verbinden</button></form>
 <hr style="border:0;border-top:1px solid var(--line);margin:16px 0">
-<form method="post" action="/network">{ui.csrf_input(self.csrf)}
+<form method="post" action="/domains">{ui.csrf_input(self.csrf)}
 <input type="hidden" name="action" value="cf_oauth">
 <div class="field"><label for="cf_client_id">OAuth-Client-ID</label>
  <input id="cf_client_id" name="cf_client_id" value="{ui.esc(client_id)}" required>
@@ -1701,7 +1794,7 @@ class Handler(BaseHTTPRequestHandler):
 <div class="field"><label for="cf_client_secret">Client-Secret <span class="muted">optional</span></label>
  <input id="cf_client_secret" name="cf_client_secret" type="password" autocomplete="off"></div>
 <button class="btn" type="submit">Mit Cloudflare anmelden</button></form>"""
-        inner = f"""<form method="post" action="/network">{ui.csrf_input(self.csrf)}
+        inner = f"""<form method="post" action="/domains">{ui.csrf_input(self.csrf)}
 <input type="hidden" name="action" value="cf_token">
 <div class="field"><label for="cf_api_token">API-Token{ui.hint_icon(
   'Cloudflare -> Profil -> API-Tokens -> Vorlage "Zone-DNS bearbeiten", alle Zonen auswählen.')}</label>
@@ -1719,13 +1812,13 @@ class Handler(BaseHTTPRequestHandler):
                        f'<span class="mono">{ui.esc(st.get("hostname"))}</span>'
                        f'<p class="help" style="margin:4px 0 0">Tailnet-IP: '
                        f'<span class="mono">{ui.esc(st.get("ip"))}</span></p></div>'
-                       f'<form method="post" action="/network">{ui.csrf_input(self.csrf)}'
+                       f'<form method="post" action="/domains">{ui.csrf_input(self.csrf)}'
                        f'<input type="hidden" name="action" value="ts_down">'
                        f'<button class="btn sm danger" type="submit">Trennen</button></form></div>')
         else:
             ts_html = (f'<p class="help" style="margin:0 0 10px">Verbinden — danach sind Apps mit '
                        f'Erreichbarkeit „Tailscale (privat)" nur in deinem Tailscale-Netz erreichbar.</p>'
-                       f'<form method="post" action="/network" class="row">{ui.csrf_input(self.csrf)}'
+                       f'<form method="post" action="/domains" class="row">{ui.csrf_input(self.csrf)}'
                        f'<input type="hidden" name="action" value="ts_up">'
                        f'<input name="authkey" placeholder="tskey-auth-…" required autocomplete="off" '
                        f'style="flex:1;min-width:220px">'
@@ -1734,7 +1827,7 @@ class Handler(BaseHTTPRequestHandler):
         for e in store.vpn_egress():
             rows += (f'<div class="between acctrow"><div><span class="mono">{ui.esc(e["label"])}</span>'
                      f'<span class="muted"> · {ui.esc(e["provider"])}</span></div>'
-                     f'<form method="post" action="/network">{ui.csrf_input(self.csrf)}'
+                     f'<form method="post" action="/domains">{ui.csrf_input(self.csrf)}'
                      f'<input type="hidden" name="action" value="egress_remove">'
                      f'<input type="hidden" name="egress_id" value="{ui.esc(e["id"])}">'
                      f'<button class="btn sm danger" type="submit" '
@@ -1752,7 +1845,7 @@ class Handler(BaseHTTPRequestHandler):
 ProtonVPN. ProtonVPN geht auch mit dem <b>kostenlosen</b> Konto — kein Abo nötig:
 im Proton-Konto unter WireGuard eine Konfiguration erstellen und privaten Schlüssel +
 Adresse hier eintragen (der Schlüssel wird nur für diesen Ausgang gespeichert).</p>
-<form method="post" action="/network">{ui.csrf_input(self.csrf)}
+<form method="post" action="/domains">{ui.csrf_input(self.csrf)}
 <input type="hidden" name="action" value="egress_add">
 <div class="field"><label for="e_label">Name</label>
  <input id="e_label" name="label" placeholder="z. B. Mullvad Zürich" required></div>
@@ -1782,23 +1875,33 @@ Adresse hier eintragen (der Schlüssel wird nur für diesen Ausgang gespeichert)
                 'zeigen und bei Cloudflare <b>grau</b> („DNS only") sein — der orange '
                 'Proxy blockiert die Zertifikat-Prüfung. „Neu holen" stellt das um und '
                 'startet Caddy neu.</p>')
-        btn = (f'<form method="post" action="/network" style="margin-top:10px">'
+        btn = (f'<form method="post" action="/domains" style="margin-top:10px">'
                f'{ui.csrf_input(self.csrf)}'
                f'<input type="hidden" name="action" value="cert_retry">'
                f'<button class="btn" type="submit">Zertifikat neu holen</button></form>')
-        return (f'<div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--line)">'
-                f'<div class="row" style="align-items:center;gap:10px">'
-                f'<b>Zertifikat für {ui.esc(dom)}</b>{pill}</div>{hint}{btn}</div>')
+        return (f'<div class="between" style="gap:10px"><h3 style="margin:0">Zertifikat</h3>'
+                f'{pill}</div><p class="help" style="margin:4px 0 0">{ui.esc(dom)}</p>'
+                f'{hint}{btn}')
 
-    def _managed_hosts(self):
+    def _managed_hosts(self, apps_list=None):
+        """Alle Namen, die weblab selbst setzt — inklusive der aus dem Connector
+        stammenden Eintraege (z. B. mail.<domain>), sonst gelten sie als verwaist."""
         hosts = set()
         md = store.get_setting("manage_domain", "")
         if md:
             hosts.add(md)
-        for app in store.list_apps():
-            for h in (app.get("domain"), app.get("manage_host")):
-                if h:
-                    hosts.add(h)
+        server_ip = store.get_setting("server_ip", "")
+        for app in (store.list_apps() if apps_list is None else apps_list):
+            connector = catalog.get(app["connector_id"]) or {}
+            for host in (app.get("domain"), app.get("manage_host"),
+                         appsvc.container_hostname(connector, app.get("values") or {})):
+                if host:
+                    hosts.add(host)
+            try:
+                for record in appsvc.dns_plan(app, connector, app.get("values") or {}, server_ip):
+                    hosts.add(record["name"])
+            except Exception:  # noqa: BLE001 - Plan ist nur Zusatzwissen
+                pass
         return hosts
 
     def _orphan_dns_html(self):
@@ -1818,126 +1921,131 @@ Adresse hier eintragen (der Schlüssel wird nur für diesen Ausgang gespeichert)
         rows = "".join(
             f"<tr><td class='mono'>{ui.esc(r.get('name'))}</td>"
             f"<td class='mono'>{ui.esc(r.get('content'))}</td>"
-            f"<td><form method='post' action='/network' style='display:inline'>{ui.csrf_input(self.csrf)}"
+            f"<td><form method='post' action='/domains' style='display:inline'>{ui.csrf_input(self.csrf)}"
             f"<input type='hidden' name='action' value='dns_delete'>"
             f"<input type='hidden' name='zone' value=\"{ui.esc(zone['name'])}\">"
             f"<input type='hidden' name='record_id' value=\"{ui.esc(r.get('id'))}\">"
-            f"<button class='btn sm danger'>Löschen</button></form></td></tr>"
+            f"<button class='btn sm danger' data-confirm='Eintrag loeschen?'>"
+            f"Löschen</button></form></td></tr>"
             for zone, r in orphans)
-        allbtn = (f"<form method='post' action='/network' style='margin-top:10px'>{ui.csrf_input(self.csrf)}"
+        allbtn = (f"<form method='post' action='/domains' style='margin-top:10px'>{ui.csrf_input(self.csrf)}"
                   f"<input type='hidden' name='action' value='dns_cleanup'>"
-                  f"<button class='btn danger' onclick=\"return confirm('Alle verwaisten Eintraege loeschen?')\">"
+                  f"<button class='btn danger' data-confirm='Alle verwaisten Eintraege loeschen?'>"
                   f"Alle {len(orphans)} loeschen</button></form>")
-        return ui.section("Verwaiste DNS-Einträge",
-            "<div class='card'><p class='help'>Zeigen auf diesen Server, gehören aber zu keiner App "
-            "(meist von einer alten Installation). Verwaltungs-Domain und aktuelle App-Einträge sind "
-            f"nicht dabei.</p><div class='tbl-wrap'><table><tr><th>Name</th><th>Ziel</th><th></th></tr>"
+        return ui.section("Einträge ohne App",
+            "<div class='card'><p class='help'>Zeigen auf diesen Server, weblab kennt sie aber nicht "
+            "(meist Reste einer alten Installation).</p><div class='tbl-wrap'><table><tr><th>Name</th><th>Ziel</th><th></th></tr>"
             f"{rows}</table></div>{allbtn}</div>")
 
     def page_network(self):
-        app_by_port = {a["host_port"]: a for a in store.list_apps()}
+        """Domains: Verwaltungs-Domain, Zertifikat, DNS-Konten, verwaiste Einträge."""
+        access = store.get_setting("manage_access", "both")
+        body = f"""<h1>Domains</h1>
+<p class="sub">Wie dieses Panel und die Apps erreichbar sind.</p>
+<form class="card" method="post" action="/domains">{ui.csrf_input(self.csrf)}
+<input type="hidden" name="action" value="general">
+<div class="field"><label for="manage_domain">Domain der Verwaltung</label>
+<input id="manage_domain" name="manage_domain" inputmode="url"{ui.TEXT_ATTRS}
+ value="{ui.esc(store.get_setting('manage_domain', ''))}" placeholder="example.com"></div>
+<div class="field"><label for="server_ip">Server-IP</label>
+<input id="server_ip" name="server_ip" inputmode="numeric"{ui.TEXT_ATTRS}
+ value="{ui.esc(store.get_setting('server_ip', ''))}"></div>
+{ui.segmented("manage_access", "Verwaltung erreichbar über", ["both", "domain", "ip"], access,
+              {"both": "Beides", "domain": "Domain", "ip": "IP"})}
+<button class="btn primary wide" type="submit">Speichern</button></form>
+<div class="card">{self._cert_status_block()}</div>
+<h2>DNS-Konten</h2>
+<div class="card">{self._cloudflare_block()}</div>
+{self._orphan_dns_html()}
+{ui.group([ui.li("Dieser Server", "/server", sub="Ports, Schnittstellen, Netze, VPN")])}"""
+        self._render("Domains", body, "/domains")
+
+    def page_server(self):
+        """Technische Sicht: was lauscht, welche Netze es gibt, VPN."""
+        apps_list = store.list_apps()
+        app_by_port = {a["host_port"]: a for a in apps_list}
         ports = sysinfo.listening_ports()
 
         def port_rows(rows):
-            out = ""
+            out = []
             for row in rows:
                 app = app_by_port.get(row["port"])
-                owner = (f"<a href='/apps/{app['id']}'>{ui.esc(app['name'])}</a>" if app
-                         else ui.esc(row["process"] or "—"))
-                out += (f"<tr><td class='mono'>{row['port']}</td><td>{ui.esc(row['proto'])}</td>"
-                        f"<td>{owner}</td></tr>")
-            return out or "<tr><td colspan='3' class='muted'>Keine.</td></tr>"
+                who = (f"<a href='/apps/{app['id']}'>{ui.esc(app['name'])}</a>" if app
+                       else ui.esc(row["process"] or "unbekannt"))
+                out.append(ui.li(f"Port {row['port']}", sub=f"{ui.esc(row['proto'].upper())} · {who}",
+                                 side="offen" if row["scope"] == "extern" else "lokal"))
+            return out or [ui.li("Keine", sub="Nichts lauscht auf diesem Server")]
 
-        def table(head, rows):
-            return (f"<div class='tbl-wrap'><table><tr>"
-                    + "".join(f"<th>{h}</th>" for h in head) + f"</tr>{rows}</table></div>")
-
-        ext = table(["Port", "Protokoll", "Dienst"],
-                    port_rows([r for r in ports if r["scope"] == "extern"]))
-        internal = table(["Port", "Protokoll", "Dienst"],
-                         port_rows([r for r in ports if r["scope"] != "extern"]))
-
-        iface_rows = ""
+        iface_rows = []
         for iface in sysinfo.interfaces():
-            addresses = ", ".join(f"{a['address']}/{a['prefix']}"
-                                  for a in iface["addresses"]) or "—"
-            iface_rows += (f"<tr><td class='mono'><b>{ui.esc(iface['name'])}</b></td>"
-                           f"<td>{ui.esc(iface['state'])}</td>"
-                           f"<td class='mono'>{ui.esc(addresses)}</td></tr>")
-        iface_html = table(["Schnittstelle", "Status", "Adressen"],
-                           iface_rows or "<tr><td colspan='3' class='muted'>—</td></tr>")
+            addresses = ", ".join(f"{a['address']}/{a['prefix']}" for a in iface["addresses"]) or "—"
+            iface_rows.append(ui.li(iface["name"], sub=ui.esc(addresses),
+                                    side=ui.esc(iface["state"])))
 
-        net_rows = ""
+        net_rows = []
         if dockerctl.available():
-            app_networks = {}
-            for app in store.list_apps():
-                app_networks.setdefault(app["network"], []).append(app["name"])
+            used = {}
+            for app in apps_list:
+                if app.get("egress_id"):
+                    continue          # laeuft im Netz seines VPN-Ausgangs, nicht im eigenen
+                used.setdefault(app["network"], []).append(app["name"])
+            details = dockerctl.network_map()
             for net in dockerctl.networks():
-                details = dockerctl.network_details(net["Name"])
-                configs = (details.get("IPAM") or {}).get("Config") or []
+                name = net["Name"]
+                configs = (details.get(name, {}).get("IPAM") or {}).get("Config") or []
                 subnet = ", ".join(c.get("Subnet", "") for c in configs) or "—"
-                used_by = ", ".join(app_networks.get(net["Name"], [])) or "—"
-                del_btn = "" if net["Name"] in ("bridge", "host", "none") else (
-                    f'<form method="post" action="/network" style="display:inline">'
-                    f'{ui.csrf_input(self.csrf)}'
-                    f'<input type="hidden" name="action" value="delete_network">'
-                    f'<input type="hidden" name="name" value="{ui.esc(net["Name"])}">'
-                    f'<button class="btn sm danger" type="submit">Löschen</button></form>')
-                net_rows += (f"<tr><td class='mono'><b>{ui.esc(net['Name'])}</b></td>"
-                             f"<td class='mono'>{ui.esc(subnet)}</td>"
-                             f"<td>{ui.esc(used_by)}</td><td>{del_btn}</td></tr>")
-        subnet_html = table(["Subnetz", "Bereich", "Genutzt von", ""],
-                            net_rows or "<tr><td colspan='4' class='muted'>—</td></tr>")
-        subnet_html += f"""<form method="post" action="/network" class="row" style="margin-top:14px">
-{ui.csrf_input(self.csrf)}<input type="hidden" name="action" value="create_network">
-<input name="name" placeholder="Name" required style="flex:1;min-width:140px">
-<input name="subnet" placeholder="10.80.0.0/24" style="flex:1;min-width:140px">
-<label class="check"><input type="checkbox" name="internal" value="1">
-<span class="help" style="margin:0">ohne Internet</span></label>
-<button class="btn" type="submit">Anlegen</button></form>"""
+                by = ", ".join(used.get(name, [])) or "frei"
+                side = ""
+                if name not in ("bridge", "host", "none"):
+                    side = (f'<form method="post" action="/server">{ui.csrf_input(self.csrf)}'
+                            f'<input type="hidden" name="action" value="delete_network">'
+                            f'<input type="hidden" name="name" value="{ui.esc(name)}">'
+                            f'<button class="btn sm danger" type="submit" data-confirm='
+                            f'"Netz {ui.esc(name)} löschen? Genutzt von: {ui.esc(by)}">'
+                            f'Löschen</button></form>')
+                net_rows.append(ui.li(name, sub=f"{ui.esc(subnet)} · {ui.esc(by)}", side=side,
+                                      chevron=False))
 
-        cur_access = store.get_setting("manage_access", "both")
-        access_opts = "".join(
-            f'<option value="{v}"{" selected" if v == cur_access else ""}>{lbl}</option>'
-            for v, lbl in (("both", "Domain und IP"), ("domain", "Nur Domain"), ("ip", "Nur IP-Adresse")))
-        body = f"""<h1>Netzwerk</h1>
-<div class="card"><form method="post" action="/network" class="row">{ui.csrf_input(self.csrf)}
-<input type="hidden" name="action" value="general">
-<div class="field" style="flex:1;min-width:190px;margin:0"><label for="manage_domain">Domain</label>
- <input id="manage_domain" name="manage_domain" value="{ui.esc(store.get_setting('manage_domain',''))}"></div>
-<div class="field" style="flex:1;min-width:160px;margin:0"><label for="server_ip">Server-IP</label>
- <input id="server_ip" name="server_ip" value="{ui.esc(store.get_setting('server_ip',''))}"></div>
-<div class="field" style="flex:1;min-width:150px;margin:0"><label for="manage_access">Zugang</label>
- <select id="manage_access" name="manage_access">{access_opts}</select></div>
-<button class="btn" type="submit" style="margin-top:22px">Speichern</button></form>
-{self._cert_status_block()}</div>
-<h2>DNS</h2>
-<div class="card">{self._cloudflare_block()}</div>
-{self._orphan_dns_html()}
-{ui.section("VPN", self._vpn_block())}
-{ui.section("Offene Ports", ext + ui.section("Intern", internal))}
-{ui.section("Erweitert", iface_html + ui.section("Subnetze", subnet_html))}"""
-        self._render("Netzwerk", body, "/network")
+        create = f"""<form class="card" method="post" action="/server">{ui.csrf_input(self.csrf)}
+<input type="hidden" name="action" value="create_network">
+<div class="field"><label for="netname">Neues Netz</label>
+<input id="netname" name="name" placeholder="wl-privat" required{ui.TEXT_ATTRS}></div>
+<div class="field"><label for="netsub">Adressbereich (optional)</label>
+<input id="netsub" name="subnet" placeholder="10.80.0.0/24" inputmode="numeric"{ui.TEXT_ATTRS}></div>
+{ui.switch_row("internal", "Ohne Internetzugang", False)}
+<button class="btn wide" type="submit">Anlegen</button></form>"""
+
+        body = f"""<h1>Dieser Server</h1>
+<p class="sub">{ui.esc(sysinfo.hostname())} · {ui.esc(sysinfo.os_pretty())}</p>
+{ui.group(port_rows([r for r in ports if r["scope"] == "extern"]), "Von außen erreichbar")}
+{ui.group(port_rows([r for r in ports if r["scope"] != "extern"]), "Nur lokal")}
+{ui.group(iface_rows, "Schnittstellen") if iface_rows else ""}
+{ui.group(net_rows, "Docker-Netze") if net_rows else ""}
+{create}
+{ui.section("VPN", self._vpn_block())}"""
+        self._render("Dieser Server", body, "/mehr", parent=("Mehr", "/mehr"))
 
     def do_network(self, form):
+        back = "/server" if urllib.parse.urlparse(
+            self.headers.get("Referer", "")).path == "/server" else "/domains"
         action = form.get("action")
         try:
             if action == "create_network":
                 dockerctl.create_network(form.get("name", "").strip(),
                                          form.get("subnet", "").strip() or None,
                                          internal=form.get("internal") == "1")
-                return self._redirect("/network", ("ok", "Subnetz angelegt."))
+                return self._redirect(back, ("ok", "Subnetz angelegt."))
             if action == "delete_network":
                 dockerctl.remove_network(form.get("name", ""))
-                return self._redirect("/network", ("ok", "Subnetz gelöscht."))
+                return self._redirect(back, ("ok", "Subnetz gelöscht."))
             if action == "dns_delete":
                 zone = form.get("zone", "") or store.get_setting("manage_domain", "")
                 token = integrations.token_for_host(store.cf_accounts(), zone)
                 if not token:
-                    return self._redirect("/network", ("err", "Kein Konto für diese Domain."))
+                    return self._redirect(back, ("err", "Kein Konto für diese Domain."))
                 ok, err = integrations.Cloudflare(token).delete_record(zone, form.get("record_id", ""))
                 integrations.invalidate_dns_cache()
-                return self._redirect("/network", ("ok", "Eintrag gelöscht.") if ok
+                return self._redirect(back, ("ok", "Eintrag gelöscht.") if ok
                                       else ("err", err or "Fehler"))
             if action == "dns_cleanup":
                 accounts = store.cf_accounts()
@@ -1952,7 +2060,7 @@ Adresse hier eintragen (der Schlüssel wird nur für diesen Ausgang gespeichert)
                             ok, _ = cf.delete_record(zone["name"], r.get("id"))
                             deleted += 1 if ok else 0
                 integrations.invalidate_dns_cache()
-                return self._redirect("/network", ("ok", f"{deleted} verwaiste Einträge gelöscht."))
+                return self._redirect(back, ("ok", f"{deleted} verwaiste Einträge gelöscht."))
             if action == "cf_oauth":
                 return self._cf_oauth_start(form)
             if action == "cert_retry":
@@ -1962,7 +2070,7 @@ Adresse hier eintragen (der Schlüssel wird nur für diesen Ausgang gespeichert)
                 # Backoff-Fenster.
                 dom = store.get_setting("manage_domain", "")
                 if not dom:
-                    return self._redirect("/network", ("err", "Keine Domain gesetzt."))
+                    return self._redirect(back, ("err", "Keine Domain gesetzt."))
                 notes = []
                 changed, info = integrations.ensure_unproxied(
                     store.cf_accounts(), dom, store.get_setting("server_ip", ""))
@@ -1972,10 +2080,10 @@ Adresse hier eintragen (der Schlüssel wird nur für diesen Ausgang gespeichert)
                     notes.append(f"DNS: {info}")
                 ok, err = integrations.retry_cert(dom)
                 if not ok:
-                    return self._redirect("/network", ("err", f"Neuversuch: {err}"))
+                    return self._redirect(back, ("err", f"Neuversuch: {err}"))
                 store.set_setting("https_ready", "0")   # Watchdog erkennt den Wechsel
                 notes.append("Caddy neu geladen — Zertifikat wird jetzt geholt (30–60 s).")
-                return self._redirect("/network", ("ok", " · ".join(notes)))
+                return self._redirect(back, ("ok", " · ".join(notes)))
             if action == "general":
                 store.set_setting("manage_domain",
                                   (form.get("manage_domain") or "").strip().lower().lstrip("@."))
@@ -1986,7 +2094,7 @@ Adresse hier eintragen (der Schlüssel wird nur für diesen Ausgang gespeichert)
                 store.set_setting("domain_ok", "1")     # nach Aenderung frisch pruefen
                 _clear_domain_banner()                  # alten Domain-Hinweis entfernen
                 ok, err = appsvc.sync_proxy()
-                return self._redirect("/network", ("ok", "Gespeichert.") if ok
+                return self._redirect(back, ("ok", "Gespeichert.") if ok
                                       else ("err", f"Proxy: {err}"))
             if action == "cf_token":
                 token = (form.get("cf_api_token") or "").strip()
@@ -2001,9 +2109,9 @@ Adresse hier eintragen (der Schlüssel wird nur für diesen Ausgang gespeichert)
                     store.set_setting("cf_status", "verknüpft")
                     progress(70, "Domains werden geladen …")
                     integrations.all_zones(store.cf_accounts())   # Cache vorwärmen
-                    return "/network"
+                    return "/domains"
 
-                return self._redirect(f"/jobs/{start_job('DNS-Konto verbinden', token_worker, fallback='/network')}")
+                return self._redirect(f"/jobs/{start_job('DNS-Konto verbinden', token_worker, fallback='/domains')}")
             if action == "cf_link":
                 email = form.get("cf_email", "").strip()
                 cf_key = form.get("cf_key", "")
@@ -2019,53 +2127,53 @@ Adresse hier eintragen (der Schlüssel wird nur für diesen Ausgang gespeichert)
                     store.set_setting("cf_status", "verknüpft")
                     progress(70, "Domains werden geladen …")
                     integrations.all_zones(store.cf_accounts())   # Cache vorwärmen
-                    return "/network"
+                    return "/domains"
 
-                return self._redirect(f"/jobs/{start_job('DNS-Konto verbinden', link_worker, fallback='/network')}")
+                return self._redirect(f"/jobs/{start_job('DNS-Konto verbinden', link_worker, fallback='/domains')}")
             if action == "cf_unlink":
                 store.remove_cf_account(form.get("account_id", ""))
                 integrations.invalidate_dns_cache()
                 if not store.cf_accounts():
                     store.set_setting("cf_status", "nicht verknüpft")
-                return self._redirect("/network", ("ok", "Verknüpfung gelöst."))
+                return self._redirect(back, ("ok", "Verknüpfung gelöst."))
             if action == "ts_up":
                 authkey = (form.get("authkey") or "").strip()
                 if not authkey:
-                    return self._redirect("/network", ("err", "Bitte einen Tailscale-Auth-Key eingeben."))
+                    return self._redirect(back, ("err", "Bitte einen Tailscale-Auth-Key eingeben."))
                 host = store.get_setting("manage_domain", "weblab").split(".")[0] or "weblab"
                 ok, err = vpn.ts_up(authkey, hostname=host)
                 if ok:
                     # Tailnet-Schnittstelle in der Firewall zulassen (privater Zugriff).
                     subprocess.run(["ufw", "allow", "in", "on", "tailscale0"],
                                    capture_output=True, text=True, timeout=15)
-                    return self._redirect("/network", ("ok", "Tailscale verbunden."))
-                return self._redirect("/network", ("err", f"Tailscale: {err}"))
+                    return self._redirect(back, ("ok", "Tailscale verbunden."))
+                return self._redirect(back, ("err", f"Tailscale: {err}"))
             if action == "ts_down":
                 vpn.ts_down()
-                return self._redirect("/network", ("ok", "Tailscale getrennt."))
+                return self._redirect(back, ("ok", "Tailscale getrennt."))
             if action == "egress_add":
                 pk = (form.get("private_key") or "").strip()
                 addr = (form.get("addresses") or "").strip()
                 if not pk or not addr:
-                    return self._redirect("/network", ("err", "Schlüssel und Adresse sind nötig."))
+                    return self._redirect(back, ("err", "Schlüssel und Adresse sind nötig."))
                 store.add_vpn_egress(form.get("label", ""), form.get("provider", "mullvad"),
                                      pk, addr, (form.get("location") or "").strip())
-                return self._redirect("/network", ("ok", "VPN-Ausgang hinzugefügt."))
+                return self._redirect(back, ("ok", "VPN-Ausgang hinzugefügt."))
             if action == "egress_remove":
                 store.remove_vpn_egress(form.get("egress_id", ""))
-                return self._redirect("/network", ("ok", "VPN-Ausgang entfernt."))
+                return self._redirect(back, ("ok", "VPN-Ausgang entfernt."))
         except Exception as exc:  # noqa: BLE001
-            return self._redirect("/network", ("err", str(exc)))
-        return self._redirect("/network")
+            return self._redirect(back, ("err", str(exc)))
+        return self._redirect("/domains")
 
     def _cf_oauth_start(self, form):
         client_id = (form.get("cf_client_id") or store.get_setting("cf_client_id", "")).strip()
         if not client_id:
-            return self._redirect("/network", ("err", "Bitte die OAuth-Client-ID eintragen."))
+            return self._redirect("/domains", ("err", "Bitte die OAuth-Client-ID eintragen."))
         store.set_setting("cf_client_id", client_id)
         domain = store.get_setting("manage_domain", "")
         if not domain:
-            return self._redirect("/network", ("err", "Bitte zuerst die Verwaltungs-Domain setzen."))
+            return self._redirect("/domains", ("err", "Bitte zuerst die Verwaltungs-Domain setzen."))
         redirect_uri = f"https://{domain}/network/cloudflare/callback"
         verifier, challenge = integrations.pkce_pair()
         state = secrets.token_urlsafe(24)
@@ -2076,56 +2184,112 @@ Adresse hier eintragen (der Schlüssel wird nur für diesen Ausgang gespeichert)
                           {"Location": integrations.authorize_url(client_id, redirect_uri,
                                                                   state, challenge)})
 
-    def page_storage(self):
-        import subprocess
-        disks = sysinfo.storage()
-        default_disk = disks[0]["name"] if disks else "?"
-        apps_by_disk = {}
-        for app in store.list_apps():
-            path = appsvc.host_data_path(app, app["data_path"])
-            size = None
+    def page_more(self):
+        """Sammelstelle: alles, was nicht täglich gebraucht wird, aber auffindbar sein muss."""
+        rows_server, rows_konto = [], []
+        if self._is_admin():
+            info = sysinfo.overview()
+            rows_server = [
+                ui.li("Speicherplatz", "/storage",
+                      sub=f"{sysinfo.human_bytes(info['disk']['free'])} frei"),
+                ui.li("Benutzer", "/users", sub="Zugänge und Freigaben"),
+                ui.li("Alte Installation einlesen", "/transfer",
+                      sub="Vorhandene Daten übernehmen"),
+                ui.li("Ports und Netze", "/server",
+                      sub="Was auf diesem Server lauscht"),
+            ]
+            version = current_version()
             try:
-                out = subprocess.run(["du", "-sb", path], capture_output=True, text=True, timeout=20)
-                if out.returncode == 0:
-                    size = int(out.stdout.split()[0])
+                update = ("Update verfügbar" if update_available()
+                          else ("aktuell" if remote_version() else "Abgleich läuft"))
             except Exception:  # noqa: BLE001
-                size = None
-            disk = sysinfo.disk_for_path(path) or default_disk
-            apps_by_disk.setdefault(disk, []).append({"app": app, "size": size})
+                update = ""
+            rows_server.insert(0, ui.li("Version & Update", "/update",
+                                        sub=f"{ui.esc(version or 'unbekannt')} · {update}"))
+        rows_konto = [
+            ui.li("Mein Konto", "/konto",
+                  sub=ui.esc((self.user or {}).get("username", ""))),
+        ]
+        body = f"""<h1>Mehr</h1>
+{ui.group(rows_konto, "Konto")}
+{ui.group(rows_server, "Dieser Server") if rows_server else ""}
+<div class="card"><p class="help">weblab {ui.esc(current_version() or "")}</p></div>"""
+        self._render("Mehr", body, "/mehr")
 
-        total_size = sum(d["size"] for d in disks)
-        total_used = sum(d["used"] for d in disks)
-        total_pct = round(total_used / total_size * 100, 1) if total_size else 0.0
-        summary = ui.stat("Gesamtspeicher", sysinfo.human_bytes(total_size), total_pct,
-                          f"{sysinfo.human_bytes(total_used)} belegt · "
-                          f"{len(disks)} Laufwerk{'e' if len(disks) != 1 else ''}")
+    def page_account(self):
+        user = self.user or {}
+        body = f"""<h1>Mein Konto</h1>
+<p class="sub">Angemeldet als {ui.esc(user.get('username', ''))}</p>
+<form class="card" method="post" action="/konto">{ui.csrf_input(self.csrf)}
+<div class="field"><label for="pw">Neues Passwort</label>
+<input id="pw" name="password" type="password" minlength="10" required
+ autocomplete="new-password"></div>
+<button class="btn primary wide" type="submit">Passwort ändern</button></form>
+<form method="post" action="/logout">{ui.csrf_input(self.csrf)}
+<button class="btn danger wide" type="submit">Abmelden</button></form>"""
+        self._render("Mein Konto", body, "/mehr", parent=("Mehr", "/mehr"))
 
-        def bar_class(pct):
-            return "bad" if pct >= 90 else "warn" if pct >= 75 else "ok"
+    def do_account(self, form):
+        password = form.get("password", "")
+        if len(password) < 10:
+            return self._redirect("/konto", ("err", "Mindestens 10 Zeichen."))
+        store.set_password(self.user["id"], password)
+        return self._redirect("/konto", ("ok", "Passwort geändert."))
 
-        disk_cards = ""
+    def page_storage(self):
+        disks = sysinfo.storage()
+        apps_by_disk, unknown = {}, []
+        for app in store.list_apps():
+            size, measured = app_size(app)
+            path = appsvc.host_data_path(app, app["data_path"])
+            disk = sysinfo.disk_for_path(path)
+            entry = {"app": app, "size": size, "measured": measured}
+            (apps_by_disk.setdefault(disk, []) if disk else unknown).append(entry)
+
+        mounted_total = sum(d["total"] for d in disks)
+        mounted_used = sum(d["used"] for d in disks)
+        percent = round(mounted_used / mounted_total * 100, 1) if mounted_total else 0.0
+        summary = ui.stat("Belegt", f"{ui.num(percent)} %", percent,
+                          f"{sysinfo.human_bytes(mounted_used)} von "
+                          f"{sysinfo.human_bytes(mounted_total)} eingehängt")
+
+        def app_rows(entries):
+            rows = []
+            for item in sorted(entries, key=lambda e: -(e["size"] or 0)):
+                if item["size"] is None:
+                    side = "wird gemessen …"
+                else:
+                    age = sysinfo.human_uptime(max(0, time.time() - item["measured"]))
+                    side = f"{sysinfo.human_bytes(item['size'])}"
+                    if time.time() - item["measured"] > 900:
+                        side += f" <span class=muted>(vor {ui.esc(age)})</span>"
+                rows.append(ui.li(item["app"]["name"], f"/apps/{item['app']['id']}", side=side))
+            return rows
+
+        cards = ""
         for disk in disks:
-            apps = apps_by_disk.get(disk["name"], [])
-            app_rows = "".join(
-                f"<tr><td><a href='/apps/{a['app']['id']}'>{ui.esc(a['app']['name'])}</a></td>"
-                f"<td class='mono'>{ui.esc(sysinfo.human_bytes(a['size']) if a['size'] is not None else '—')}</td>"
-                f"</tr>" for a in apps) or \
-                "<tr><td colspan='2' class='muted'>Keine App auf diesem Laufwerk.</td></tr>"
-            model = f' <span class="muted">· {ui.esc(disk["model"])}</span>' if disk["model"] else ""
-            disk_cards += f"""<div class="card">
-<div class="between"><h3 style="margin:0">🖴 <span class="mono">{ui.esc(disk['name'])}</span>{model}</h3>
+            entries = apps_by_disk.get(disk["name"], [])
+            model = f" · {ui.esc(disk['model'])}" if disk["model"] else ""
+            cards += f"""<div class="card">
+<div class="between"><h3 style="margin:0">{ui.esc(disk['name'])}<span class="muted"
+ style="font-weight:400">{model}</span></h3>
 <span class="mono">{ui.esc(sysinfo.human_bytes(disk['size']))}</span></div>
-<div class="bar {bar_class(disk['percent'])}" style="margin:11px 0 4px"><i style="width:{disk['percent']:.1f}%"></i></div>
-<div class="help">{disk['percent']} % belegt · {ui.esc(sysinfo.human_bytes(disk['used']))} von {ui.esc(sysinfo.human_bytes(disk['total']))}</div>
-<div class="tbl-wrap"><table style="margin-top:12px">
-<tr><th>App</th><th>Belegt</th></tr>{app_rows}</table></div></div>"""
-        disk_cards = disk_cards or "<div class='card muted'>Keine Laufwerke erkannt.</div>"
+<div class="bar {ui._bar_class(disk['percent'])}" style="margin:12px 0 6px">
+<i style="width:{disk['percent']:.1f}%"></i></div>
+<div class="help">{ui.num(disk['percent'])} % belegt ·
+{ui.esc(sysinfo.human_bytes(disk['used']))} von
+{ui.esc(sysinfo.human_bytes(disk['total']))} eingehängt</div></div>"""
+            if entries:
+                cards += f'<div class="list">{"".join(app_rows(entries))}</div>'
+        cards = cards or '<div class="card muted">Keine Laufwerke erkannt.</div>'
+        if unknown:
+            cards += ui.group(app_rows(unknown), "Laufwerk unbekannt")
 
-        body = f"""<h1>Speicher</h1>
-
-<div class="grid g4">{summary}</div>
-<h2>Laufwerke</h2>{disk_cards}"""
-        self._render("Speicher", body, "/storage")
+        body = f"""<h1>Speicherplatz</h1>
+<p class="sub">App-Größen enthalten Datenbank und Verwaltung der App.</p>
+<div class="grid g2">{summary}</div>
+<h2>Laufwerke</h2>{cards}"""
+        self._render("Speicherplatz", body, "/mehr", parent=("Mehr", "/mehr"))
 
     def page_users(self):
         rows = ""
@@ -2138,22 +2302,19 @@ Adresse hier eintragen (der Schlüssel wird nur für diesen Ausgang gespeichert)
 <input type="hidden" name="user_id" value="{user['id']}">
 <button class="btn sm danger" type="submit"
  onclick="return confirm('Benutzer löschen?')">Löschen</button></form>"""
-            rows += (f"<tr><td><b>{ui.esc(user['username'])}</b>"
-                     f"{me_badge}</td>"
-                     f"<td>{ui.esc(user['role'])}</td><td class='mono'>{created}</td>"
-                     f"<td>{delete_btn}</td></tr>")
+            rows += ui.li(user["username"], sub=f"{ui.esc(user['role'])} · seit {created}",
+                          side=(me_badge + delete_btn), chevron=False)
 
         body = f"""<h1>Benutzer</h1>
 
-<div class="card"><div class="tbl-wrap"><table>
-<tr><th>Benutzer</th><th>Rolle</th><th>Angelegt</th><th></th></tr>{rows}</table></div></div>
+<div class="list">{rows}</div>
 <div class="grid g2" style="margin-top:14px">
 <div class="card"><h3>Benutzer anlegen</h3>
 <form method="post" action="/users">{ui.csrf_input(self.csrf)}
 <input type="hidden" name="action" value="create">
 <div class="field"><label for="nu">Benutzername</label><input id="nu" name="username" required></div>
 <div class="field"><label for="np">Passwort</label>
- <input id="np" name="password" type="password" required minlength="10"></div>
+ <input id="np" name="password" type="password" required minlength="10" autocomplete="new-password"></div>
 <div class="field"><label for="nr">Rolle</label><select id="nr" name="role">
  <option value="user">Nutzer — nur eigene Apps</option>
  <option value="admin">Administrator — voller Zugriff</option></select></div>
@@ -2162,9 +2323,9 @@ Adresse hier eintragen (der Schlüssel wird nur für diesen Ausgang gespeichert)
 <form method="post" action="/users">{ui.csrf_input(self.csrf)}
 <input type="hidden" name="action" value="password">
 <div class="field"><label for="pw">Neues Passwort</label>
- <input id="pw" name="password" type="password" required minlength="10"></div>
+ <input id="pw" name="password" type="password" required minlength="10" autocomplete="new-password"></div>
 <button class="btn primary" type="submit">Ändern</button></form></div></div>"""
-        self._render("Benutzer", body, "/users")
+        self._render("Benutzer", body, "/mehr", parent=("Mehr", "/mehr"))
 
     def do_users(self, form):
         action = form.get("action")
@@ -2198,23 +2359,47 @@ Adresse hier eintragen (der Schlüssel wird nur für diesen Ausgang gespeichert)
     def cf_callback(self):
         query = self._query()
         if query.get("error"):
-            return self._redirect("/network",
+            return self._redirect("/domains",
                                   ("err", f"Cloudflare: {query.get('error_description') or query['error']}"))
         if not CF_LOGIN.get("state") or query.get("state") != CF_LOGIN["state"]:
-            return self._redirect("/network", ("err", "Anmeldung abgelaufen — bitte erneut starten."))
+            return self._redirect("/domains", ("err", "Anmeldung abgelaufen — bitte erneut starten."))
         token, err = integrations.exchange_code(
             CF_LOGIN["client_id"], CF_LOGIN["client_secret"], CF_LOGIN["redirect_uri"],
             query.get("code", ""), CF_LOGIN["verifier"])
         CF_LOGIN.update({"state": "", "verifier": "", "client_secret": ""})
         if not token:
-            return self._redirect("/network", ("err", f"Anmeldung fehlgeschlagen: {err}"))
+            return self._redirect("/domains", ("err", f"Anmeldung fehlgeschlagen: {err}"))
         store.add_cf_account("Cloudflare-Anmeldung", token)
         store.set_setting("cf_status", "verknüpft")
-        return self._redirect("/network", ("ok", "DNS-Konto verbunden."))
+        return self._redirect("/domains", ("ok", "DNS-Konto verbunden."))
 
     # Dateien einer App
     def _app_base(self, app):
         return appsvc.host_data_path(app, app["data_path"])
+
+    def page_files_external(self, app, connector):
+        """Dateien liegen im eigenen Dashboard der App — hier nur Tür und Zugang."""
+        spec = appsvc.manager_spec(connector) or {}
+        label = spec.get("label") or "Dateiverwaltung"
+        host = app.get("manage_host") or ""
+        values = app["values"]
+        if host:
+            open_html = (f'<a class="btn primary wide" href="https://{ui.esc(host)}" '
+                         f'target="_blank" rel="noopener">Dateien öffnen &#8599;</a>')
+            where = f'<p class="sub">{ui.esc(label)} auf {ui.esc(host)}</p>'
+        else:
+            open_html = ('<p class="msg err">Für diese App ist keine Verwaltungs-Domain '
+                         'gesetzt — unter Einstellungen nachtragen.</p>')
+            where = ""
+        body = f"""<h1>Dateien</h1>{where}
+{self._app_tabs(app, 'Dateien')}
+<div class="card">{open_html}</div>
+{ui.group([ui.secret_row("Benutzer", values.get("manager_user", "")),
+           ui.secret_row("Passwort", values.get("manager_password", ""))], "Anmeldung")}
+<div class="card"><p class="help">Hochladen, Umbenennen, Löschen und Bearbeiten passiert
+direkt in {ui.esc(label)} — dem eigenen Dashboard dieser App.</p></div>"""
+        return self._render(f"{app['name']} — Dateien", body, "/apps",
+                            parent=(app["name"], f"/apps/{app['id']}"))
 
     def page_app_files(self, app_id):
         app, connector = self._app_and_connector(app_id)
@@ -2224,6 +2409,8 @@ Adresse hier eintragen (der Schlüssel wird nur für diesen Ausgang gespeichert)
             return self._redirect(f"/apps/{app_id}", ("err", "Dafuer fehlt die Berechtigung."))
         if not (connector or {}).get("manage_subdomain"):
             return self._redirect(f"/apps/{app_id}")
+        if appsvc.manager_active(connector, app["values"]):
+            return self.page_files_external(app, connector)
         base = self._app_base(app)
         query = self._query()
         current = query.get("p", "")
@@ -2242,12 +2429,14 @@ Adresse hier eintragen (der Schlüssel wird nur für diesen Ausgang gespeichert)
 <form method="post" action="/apps/{app_id}/files">
 {ui.csrf_input(self.csrf)}<input type="hidden" name="action" value="save">
 <input type="hidden" name="path" value="{ui.esc(edit_file)}">
-<div class="card"><textarea name="content" rows="24" spellcheck="false"
- style="font-family:var(--mono);font-size:13px">{ui.esc(content)}</textarea>
+<div class="card"><textarea name="content" rows="14" spellcheck="false"
+ autocapitalize="off" autocorrect="off" autocomplete="off"
+ style="font-family:var(--mono)">{ui.esc(content)}</textarea>
 <div class="row" style="margin-top:12px">
 <button class="btn primary" type="submit">Speichern</button>
 <a class="btn" href="/apps/{app_id}/files?p={ui.esc(parent)}">Abbrechen</a></div></div></form>"""
-            return self._render(f"{app['name']} — {edit_file}", body, "/apps")
+            return self._render(f"{app['name']} — {edit_file}", body, "/apps",
+                                parent=("Dateien", f"/apps/{app_id}/files"))
 
         try:
             entries = files.listing(base, current)
@@ -2261,7 +2450,7 @@ Adresse hier eintragen (der Schlüssel wird nur für diesen Ausgang gespeichert)
         rows = ""
         if current:
             parent = "/".join(current.split("/")[:-1])
-            rows += (f'<tr><td colspan="5"><a href="/apps/{app_id}/files?p={ui.esc(parent)}">'
+            rows += (f'<tr><td colspan="4"><a href="/apps/{app_id}/files?p={ui.esc(parent)}">'
                      f'⬆ eine Ebene höher</a></td></tr>')
         for entry in entries:
             if entry["dir"]:
@@ -2277,23 +2466,24 @@ Adresse hier eintragen (der Schlüssel wird nur für diesen Ausgang gespeichert)
                 if entry["text"]:
                     actions = (f'<a class="btn sm" href="/apps/{app_id}/files?edit='
                                f'{ui.esc(entry["path"])}">Bearbeiten</a> ') + actions
-            rows += f"""<tr><td>{name_html}</td><td class="mono">{ui.esc(size)}</td>
-<td class="mono">{ui.esc(entry['modified'])}</td><td class="row">{actions}
+            rows += f"""<tr><td data-label="Name">{name_html}</td>
+<td class="mono" data-label="Größe">{ui.esc(size)}</td>
+<td class="mono" data-label="Geändert">{ui.esc(entry['modified'])}</td>
+<td data-label=""><span class="row">{actions}
 <form method="post" action="/apps/{app_id}/files" style="display:inline">
 {ui.csrf_input(self.csrf)}<input type="hidden" name="action" value="delete">
 <input type="hidden" name="path" value="{ui.esc(entry['path'])}">
 <button class="btn sm danger" type="submit"
- onclick="return confirm('{ui.esc(entry['name'])} wirklich löschen?')">Löschen</button>
-</form></td></tr>"""
+ data-confirm="{ui.esc(entry['name'])} wirklich löschen?">Löschen</button>
+</form></span></td></tr>"""
         if not entries and not current:
             rows += '<tr><td colspan="4" class="muted">Noch keine Dateien.</td></tr>'
 
-        used = files.usage(base)
         docroot = (connector or {}).get("data", {}).get("container_path", "/data")
-        body = f"""<a href="/apps/{app_id}" class="muted">← {ui.esc(app['name'])}</a>
-<h1>Dateien</h1>
-<p class="sub">{used['files']} {'Datei' if used['files'] == 1 else 'Dateien'} ·
-{ui.esc(sysinfo.human_bytes(used['bytes']))}</p>
+        size, _ = app_size(app)         # Hintergrundmessung, kein Baumlauf beim Anzeigen
+        body = f"""<h1>Dateien</h1>
+<p class="sub">{ui.esc(sysinfo.human_bytes(size)) if size else "Größe wird gemessen"}
+· {len(entries)} Einträge hier</p>
 {self._app_tabs(app, 'Dateien')}
 <div class="card" style="margin-bottom:14px"><dl class="kv">
 <dt>Im Container</dt><dd class="mono">{ui.esc(docroot)}</dd>
@@ -2301,8 +2491,9 @@ Adresse hier eintragen (der Schlüssel wird nur für diesen Ausgang gespeichert)
 </dl></div>
 <div class="card"><div class="between" style="margin-bottom:10px">
 <div class="mono">{crumbs}</div></div>
-<div class="tbl-wrap"><table>
-<tr><th>Name</th><th>Größe</th><th>Geändert</th><th></th></tr>{rows}</table></div></div>
+<div class="tbl-wrap"><table class="stacked">
+<thead><tr><th>Name</th><th>Größe</th><th>Geändert</th><th></th></tr></thead>
+<tbody>{rows}</tbody></table></div></div>
 <div class="grid g3" style="margin-top:14px">
 <div class="card"><h3>Datei hochladen</h3>
 <form method="post" action="/apps/{app_id}/files" enctype="multipart/form-data">
@@ -2322,7 +2513,8 @@ Adresse hier eintragen (der Schlüssel wird nur für diesen Ausgang gespeichert)
 <div class="field"><input name="name" placeholder="z. B. seite.html" required></div>
 <button class="btn" type="submit">Anlegen &amp; bearbeiten</button></form></div>
 </div>"""
-        self._render(f"{app['name']} — Dateien", body, "/apps")
+        self._render(f"{app['name']} — Dateien", body, "/apps",
+                     parent=(app["name"], f"/apps/{app['id']}"))
 
     def download_file(self, app_id):
         app, connector = self._app_and_connector(app_id)
@@ -2433,6 +2625,22 @@ def _clear_domain_banner():
         store.set_setting("banner", "")
 
 
+def _warmup():
+    """Symbole und Messwerte vorbereiten, damit die erste Seite sofort steht."""
+    for job in (icon.warm, _refresh_remote_version):
+        try:
+            job()
+        except Exception:  # noqa: BLE001
+            pass
+    while True:
+        try:
+            measure_sizes()
+            vpn.ts_ip(max_age=0) if store.list_apps() else None
+        except Exception:  # noqa: BLE001
+            pass
+        time.sleep(600)
+
+
 def _domain_watchdog():
     """Prueft regelmaessig, ob die Verwaltungs-Domain noch auf DIESEN Server zeigt.
     Zeigt sie woandershin oder ist der Eintrag weg, bleibt das Panel automatisch ueber
@@ -2441,10 +2649,11 @@ def _domain_watchdog():
     misses = ups = 0
     while True:
         time.sleep(WATCHDOG_INTERVAL)
-        try:
-            _refresh_service_certs()
-        except Exception:  # noqa: BLE001
-            pass
+        for job in (_refresh_service_certs, _refresh_remote_version, connector_news):
+            try:
+                job()
+            except Exception:  # noqa: BLE001 - Hintergrundarbeit darf nie abbrechen
+                pass
         try:
             domain = store.get_setting("manage_domain", "")
             access = store.get_setting("manage_access", "both")
@@ -2516,6 +2725,7 @@ def serve():
         except Exception:  # noqa: BLE001 - der Start darf daran nie scheitern
             pass
     threading.Thread(target=_domain_watchdog, daemon=True).start()
+    threading.Thread(target=_warmup, daemon=True).start()
     httpd = ThreadingHTTPServer((HOST, PORT), Handler)
     httpd.daemon_threads = True
     print(f"weblab läuft auf http://{HOST}:{PORT}", flush=True)

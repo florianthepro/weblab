@@ -30,20 +30,27 @@ Dieselbe Prüfung läuft regelmäßig von selbst (systemd-Timer).
 
 Nach der Installation **`http://<server-ip>`** öffnen: Der Assistent fragt **Admin + Passwort +
 Verwaltungs-Domain** (deren `@`-Record auf diese IP zeigt). Anschließend läuft die Oberfläche
-unter **`https://deine-domain`**; das DNS-Konto verbindest du danach unter *Netzwerk*.
+unter **`https://deine-domain`**; das DNS-Konto verbindest du danach unter *Domains*.
 
 ## Oberfläche
 
 | Bereich | Inhalt |
 |---|---|
-| **Dashboard** | Auslastung des Servers (CPU/RAM/Platte) + Verbrauch je App |
+| **Start** | Was zu erledigen ist, Auslastung (CPU/RAM/Platte), alle Apps mit Zustand |
 | **Apps** | Katalog (installieren) und installierte Apps (verwalten) |
-| **Netzwerk** | Domain & Server-IP, DNS-Konto + Einträge, VPN, offene Ports |
-| **Speicher** | Laufwerke (physisch) mit Belegung je Disk und welche App wie viel belegt |
-| **Benutzer** | Konten für die Oberfläche |
+| **Domains** | Verwaltungs-Domain, Zertifikat, DNS-Konten, Einträge ohne App |
+| **Mehr** | Mein Konto, Version & Update, Speicherplatz, Benutzer, dieser Server (Ports, Netze, VPN) |
 
-Tiefere Angaben stecken in aufklappbaren Bereichen; Fehler erscheinen als Banner, das auf
-jeder Seite bleibt, bis man es schließt.
+Die Oberfläche ist fürs Telefon gebaut (iOS-Look: Leiste unten, gruppierte Listen, Schalter,
+sichere Bereiche) und wächst am Rechner zur Seitenleiste. Als Web-App auf den Home-Bildschirm
+gelegt läuft sie ohne Browser-Rahmen. Fehler erscheinen als Banner, das auf jeder Seite bleibt,
+bis man es schließt.
+
+## Windows-App
+
+`builder.bat` doppelklicken → `dist\weblab.exe`. Die App merkt sich die Server, zeigt, ob sie
+erreichbar sind, und öffnet die Verwaltung in einem eigenen Fenster ohne Browser-Rahmen.
+Voraussetzung ist nur Python 3 auf dem Windows-Rechner; PyInstaller holt der Builder selbst.
 
 ## Updates
 weblab vergleicht sich regelmäßig mit GitHub und aktualisiert sich selbst — Daten bleiben.
@@ -51,7 +58,7 @@ Sichtbar ist davon nur, was zählt: neue Apps im Katalog sind mit **neu** markie
 installierten Apps erscheint **Update**, wenn es eine neuere Version gibt.
 
 ## VPN je App
-Unter **Netzwerk → VPN**:
+Unter **Mehr → Dieser Server → VPN**:
 - **Tailscale (privat):** Konto verbinden (Auth-Key); Apps mit Erreichbarkeit
   **Tailscale (privat)** sind dann nur in deinem Tailscale-Netz erreichbar — ideal zum
   Verwalten, ohne etwas öffentlich zu machen.
@@ -69,9 +76,9 @@ Beim Installieren werden nur die **Pflichtfelder** abgefragt (z. B. RAM bei Mine
 Ablageort (Docker/Gerät), Datenlaufwerk, CPU und RAM.
 
 Webseiten (Apache/Nginx) und der Mailserver haben eine eigene **Verwaltungs-Adresse**
-(standardmäßig `apache.<domain>` / `nginx.<domain>` / `mail.<domain>`). Dort öffnet sich das
-**Dashboard mit Dateimanager** dieser App — durchsuchen, Ordner anlegen, hochladen, Textdateien
-bearbeiten, löschen. Die Seite selbst läuft unter ihrer eigenen Domain (`domain.com` oder
+(standardmäßig `apache.<domain>` / `nginx.<domain>` / `mail.<domain>`). Dort läuft **SFTPGo**
+als eigenes Dashboard dieser Webseite — hochladen, Ordner anlegen, umbenennen, löschen,
+Textdateien im Browser bearbeiten. Zugangsdaten stehen bei der App unter *Zugangsdaten*. Die Seite selbst läuft unter ihrer eigenen Domain (`domain.com` oder
 `<name>.domain.com`). So lassen sich Apache/Nginx **mehrfach** installieren — je Webseite eine
 eigene Domain, eine eigene Verwaltungs-Adresse und ein eigener Dateibereich.
 
@@ -86,7 +93,7 @@ PostgreSQL, MariaDB, Redis, Adminer, Gitea, Vaultwarden, Uptime Kuma, FreshRSS,
 code-server, IT-Tools.
 
 ## DNS-Konto verbinden
-Unter **Netzwerk → DNS-Konto verbinden** (Overlay). Am einfachsten mit einem **API-Token**
+Unter **Domains → DNS-Konto verbinden** (Overlay). Am einfachsten mit einem **API-Token**
 (Cloudflare → Profil → API-Tokens → Vorlage „Zone-DNS bearbeiten"). Unter *Andere Wege* gibt
 es zusätzlich die Konto-Anmeldung (E-Mail + Global API Key, wird nicht gespeichert) und
 die Anmeldung per OAuth.

@@ -2,3 +2,9 @@
 software/box.env
 __pycache__/
 *.pyc
+build/
+dist/
+desktop/weblab.ico
+wl-*/
+*.sqlite
+*.sqlite-*
